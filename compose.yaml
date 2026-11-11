@@ -1,0 +1,6 @@
+# Root entrypoint so that `docker compose ...` works from the repository root.
+# The actual services are defined in deploy/compose.yaml.
+name: procenka
+
+include:
+  - deploy/compose.yaml

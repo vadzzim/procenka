@@ -18,12 +18,21 @@
 
 Заполняются на шаге 1 и поддерживаются в актуальном виде. Шаг считается готовым, только если все они зелёные.
 
+Все команды запускаются из корня репозитория (PowerShell и Git Bash одинаково). Python-проект лежит в `backend/`, поэтому uv вызывается с `--directory backend`.
+
 ```sh
-# заполнить на шаге 1, например:
-# uv run ruff check . && uv run ruff format --check .
-# uv run mypy .
-# uv run pytest
+docker compose up -d --wait postgres
+uv run --directory backend ruff check
+uv run --directory backend ruff format --check
+uv run --directory backend mypy
+uv run --directory backend pytest
+docker compose config --quiet
 ```
+
+- `pytest` гоняет и unit-, и интеграционные тесты (маркер `integration`). Если PostgreSQL недоступен, интеграционные тесты падают, а не пропускаются.
+- Интеграционные тесты берут URL из `TEST_DATABASE_URL`, по умолчанию `postgresql+asyncpg://procenka:procenka@localhost:54329/procenka_test`, и сами создают базу `procenka_test`, если её нет. Порт postgres на хосте — `POSTGRES_HOST_PORT` (по умолчанию 54329); пример переменных — `.env.example`.
+- `.env` из корня читает только `docker compose`, pytest его не загружает. Если порт или учётные данные postgres изменены в `.env`, экспортируй `TEST_DATABASE_URL` в оболочке или запускай `uv run --directory backend --env-file ../.env pytest` (путь `--env-file` считается от `backend/`).
+- Быстрый прогон без БД: `uv run --directory backend pytest -m "not integration"`. Готовность шага по нему не проверяется.
 
 ## Соглашения
 
@@ -40,6 +49,7 @@
 - Работа идёт в `main`, один шаг — один коммит. Без amend, без force push, без `--no-verify`.
 - Сообщение коммита: `step N: <кратко>`, затем пустая строка и список изменений.
 - Не коммить секреты, `.env`, артефакты сборки и `node_modules`.
+- В сообщениях коммитов нет `Co-Authored-By` и иных строк атрибуции агентов.
 
 ## Ревью
 

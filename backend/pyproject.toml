@@ -1,0 +1,42 @@
+[project]
+name = "procenka-backend"
+version = "0.1.0"
+description = "Procenka demo: competitor price collection and safe pricing"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "sqlalchemy[asyncio]>=2.0,<3",
+    "asyncpg>=0.30",
+]
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "mypy",
+    "pytest",
+    "pytest-asyncio>=1.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "ASYNC", "PT"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+files = ["app", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers", "--strict-config", "-ra"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+markers = [
+    "integration: needs a running PostgreSQL (docker compose up -d --wait postgres); fails, never skips, when it is unavailable",
+]
