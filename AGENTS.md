@@ -33,6 +33,19 @@ docker compose config --quiet
 - Интеграционные тесты берут URL из `TEST_DATABASE_URL`, по умолчанию `postgresql+asyncpg://procenka:procenka@localhost:54329/procenka_test`, и сами создают базу `procenka_test`, если её нет. Порт postgres на хосте — `POSTGRES_HOST_PORT` (по умолчанию 54329); пример переменных — `.env.example`.
 - `.env` из корня читает только `docker compose`, pytest его не загружает. Если порт или учётные данные postgres изменены в `.env`, экспортируй `TEST_DATABASE_URL` в оболочке или запускай `uv run --directory backend --env-file ../.env pytest` (путь `--env-file` считается от `backend/`).
 - Быстрый прогон без БД: `uv run --directory backend pytest -m "not integration"`. Готовность шага по нему не проверяется.
+- Согласованность моделей и миграций (`alembic check`), а также `upgrade head` → `downgrade base` → `upgrade head` проверяет интеграционный тест `tests/integration/test_migrations.py` в отдельной базе `procenka_test_migrations`; отдельной команды проверки нет.
+
+## База демо
+
+Приложение берёт URL из `DATABASE_URL`, по умолчанию `postgresql+asyncpg://procenka:procenka@localhost:54329/procenka` (основная база compose-postgres).
+
+```sh
+uv run --directory backend alembic upgrade head      # применить миграции
+uv run --directory backend python -m app.db.seed     # загрузить демо-набор (только недостающие товары)
+uv run --directory backend python -m app.db.reset    # очистить всё и вернуть точное состояние seed
+```
+
+Команды seed и reset миграции не применяют. Новая миграция: `uv run --directory backend alembic revision --autogenerate -m "..."`, затем проверить и поправить файл (типы enum в `downgrade` удаляются вручную).
 
 ## Соглашения
 
