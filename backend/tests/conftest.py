@@ -10,6 +10,7 @@ import os
 from collections.abc import AsyncIterator
 
 import pytest
+from _pytest.terminal import TerminalReporter
 from sqlalchemy import make_url, text
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -68,3 +69,29 @@ async def db_engine(test_database_url: URL) -> AsyncIterator[AsyncEngine]:
         yield engine
     finally:
         await engine.dispose()
+
+
+# --- Control cases summary -------------------------------------------------
+
+_CONTROL_CASE_TEST = "test_control_cases.py::test_control_case["
+_control_case_outcomes: dict[str, int] = {"matched": 0, "mismatched": 0}
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    if _CONTROL_CASE_TEST not in report.nodeid:
+        return
+    if report.when == "call":
+        _control_case_outcomes["matched" if report.passed else "mismatched"] += 1
+    elif report.failed:  # setup or teardown error also means the case did not match
+        _control_case_outcomes["mismatched"] += 1
+
+
+def pytest_terminal_summary(terminalreporter: TerminalReporter) -> None:
+    matched = _control_case_outcomes["matched"]
+    mismatched = _control_case_outcomes["mismatched"]
+    if matched or mismatched:
+        terminalreporter.write_line(
+            f"control cases: {matched} matched, {mismatched} mismatched",
+            red=bool(mismatched),
+            green=not mismatched,
+        )

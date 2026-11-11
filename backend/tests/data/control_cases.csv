@@ -1,0 +1,26 @@
+id,description,brand,article,purchase,markup_percent,step,ceiling,published,threshold_percent,offers,expected_price,expected_state,expected_reason,expected_rejected
+control_1250,"Контрольный пример: конкурент 1 250, шаг 10 → 1 240",Bosch,0986452041,1000,20,10,,1300,20,Bosch|0 986-452 041|1250|5|2,1240.00,published,,
+control_1100_lower_bound,"Конкурент 1 100: целевая 1 090 ниже границы 1 200 → 1 200",Bosch,0986452041,1000,20,10,,1250,20,BOSCH|0986452041|1100|3|1,1200.00,published,,
+price_spike_control,"Контрольный товар price_spike: конкурент 1 500 при опубликованной 1 990 → 1 490 (−25,1 %)",Bosch,0986452041,1000,20,10,,1990,20,Bosch|0986452041|1500|4|3;Bosch|0986452041|2000|2|5,1490.00,quarantine,price_spike,
+scenario_first_run_1260,"Сценарий показа: опубликованная 1 260 → 1 240; отброшены другой бренд и подозрительно низкая цена",Bosch,0986452041,1000,20,10,,1260,20,Bosch|0 986-452 041|1250|5|2;MANN|0986452041|1100|7|1;bosch|0986.452.041|450|10|1,1240.00,published,,other_brand;suspiciously_low_price
+ceiling_applied,"Потолок 1 300 ограничивает целевую 1 490",Bosch,0986452041,1000,20,10,1300,1280,20,Bosch|0986452041|1500|5|2,1300.00,published,,
+ceiling_below_lower_bound,"Потолок 1 199,99 ниже границы 1 200: конфликт правил",Bosch,0986452041,1000,20,10,1199.99,1250,20,Bosch|0986452041|1500|5|2,,retained,rules_conflict,
+ceiling_equals_lower_bound,"Потолок равен границе 1 200: допустимо → 1 200",Bosch,0986452041,1000,20,10,1200,1210,20,Bosch|0986452041|1500|5|2,1200.00,published,,
+zero_purchase,"Нулевая закупка: цена не публикуется",Bosch,0986452041,0,20,10,,1240,20,Bosch|0986452041|1250|5|2,,retained,invalid_purchase_price,
+negative_purchase,"Отрицательная закупка: цена не публикуется",Bosch,0986452041,-100,20,10,,1240,20,Bosch|0986452041|1250|5|2,,retained,invalid_purchase_price,
+empty_offers,"Нет предложений: оставлена предыдущая",Bosch,0986452041,1000,20,10,,1240,20,,,retained,no_eligible_offers,
+other_brand_only,"Единственное предложение другого бренда (MANN-FILTER)",Bosch,0986452041,1000,20,10,,1240,20,MANN|0986452041|1250|5|2,,retained,no_eligible_offers,other_brand
+suspiciously_low_price,"499,99 < 1 000 × 0,5 отбрасывается; минимум 1 300 → 1 290",Bosch,0986452041,1000,20,10,,1250,20,Bosch|0986452041|499.99|5|1;Bosch|0986452041|1300|5|1,1290.00,published,,suspiciously_low_price
+exactly_at_factor,"500,00 = 1 000 × 0,5 не отбрасывается; целевая 490 → граница 1 200 = опубликованной",Bosch,0986452041,1000,20,10,,1200,20,Bosch|0986452041|500.00|5|1,1200.00,unchanged,,
+threshold_exact_up,"Изменение ровно +20 % (1 000 → 1 200): не карантин",Bosch,0986452041,500,20,10,,1000,20,Bosch|0986452041|1210|5|1,1200.00,published,,
+threshold_just_over,"Изменение +20,0012 % (999,99 → 1 200): карантин",Bosch,0986452041,500,20,10,,999.99,20,Bosch|0986452041|1210|5|1,1200.00,quarantine,price_spike,
+threshold_exact_down,"Изменение ровно −20 % (1 500 → 1 200 по границе): не карантин",Bosch,0986452041,1000,20,10,,1500,20,Bosch|0986452041|1100|5|1,1200.00,published,,
+markup_fractional_ceil,"100,01 × 1,13 = 113,0113 → граница вверх до 113,02",Bosch,0986452041,100.01,13,10,,113,20,Bosch|0986452041|100|5|1,113.02,published,,
+target_half_cent_up,"1 250,005 − 10 = 1 240,005 → 1 240,01 по ROUND_HALF_UP",Bosch,0986452041,1000,20,10,,1240,20,Bosch|0986452041|1250.005|5|1,1240.01,published,,
+target_below_half_cent,"1 250,004 − 10 = 1 240,004 → 1 240,00 = опубликованной",Bosch,0986452041,1000,20,10,,1240,20,Bosch|0986452041|1250.004|5|1,1240.00,unchanged,,
+ceiling_floor_rounding,"Потолок 1 300,019 округляется вниз до 1 300,01",Bosch,0986452041,1000,20,10,1300.019,1300,20,Bosch|0986452041|1500|5|1,1300.01,published,,
+equals_published,"Рекомендация 1 240 равна опубликованной",Bosch,0986452041,1000,20,10,,1240,20,Bosch|0986452041|1250|5|2,1240.00,unchanged,,
+no_previous_price,"Опубликованной цены нет: первая рекомендация в карантин",Bosch,0986452041,1000,20,10,,,20,Bosch|0986452041|1250|5|2,1240.00,quarantine,no_previous_price,
+stock_and_delivery,"Нет в наличии и срок 15 дней отброшены; срок ровно 14 дней допустим",Bosch,0986452041,1000,20,10,,1400,20,Bosch|0986452041|1250|0|1;Bosch|0986452041|1260|5|15;Bosch|0986452041|1400|5|14,1390.00,published,,out_of_stock;delivery_too_long
+other_article_and_non_positive_price,"Другой артикул; цены 0 и −5 отброшены",Bosch,0986452041,1000,20,10,,1300,20,Bosch|OC 90|900|5|1;Bosch|0986452041|0|5|1;Bosch|0986452041|-5|5|1;Bosch|0986452041|1250|5|2,1240.00,published,,other_article;non_positive_price;non_positive_price
+brand_synonym_mb,"MB и mercedes benz сводятся к Mercedes-Benz; артикул с пробелами и дефисами",Mercedes-Benz,A 000 180 26 09,1000,20,10,,1300,20,MB|A0001802609|1250|5|2;mercedes benz|a000-180-26-09|1300|1|3,1240.00,published,,
