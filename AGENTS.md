@@ -60,8 +60,14 @@ docker compose up --build -d                       # postgres, fake-sites, api (
 curl -X POST http://127.0.0.1:8000/api/runs         # поставить прогон; повторный запрос вернёт тот же id
 curl http://127.0.0.1:8000/api/runs/<id>            # статус прогона и источников
 curl http://127.0.0.1:8000/api/published-prices     # опубликованные цены
+curl http://127.0.0.1:8001/control/modes            # режимы источников fake-sites
+curl -X PUT http://127.0.0.1:8001/control/modes/html_catalog -H 'content-type: application/json' -d '{"mode":"markup_changed"}'
+curl -X PUT http://127.0.0.1:8001/control/modes/json_api -H 'content-type: application/json' -d '{"mode":"blocked","retry_after":5}'
+curl -X POST http://127.0.0.1:8001/control/reset    # оба источника в normal
 docker compose exec api python -m app.db.reset      # вернуть демо в состояние seed
 ```
+
+Режимы: `normal`, `markup_changed`, `unavailable`, `blocked`, `price_spike`; источники `html_catalog`, `json_api`. Режимы живут в памяти fake-sites и сбрасываются при его перезапуске.
 
 Без контейнеров api и worker: `uv run --directory backend uvicorn app.api.main:app`, `uv run --directory fake_sites uvicorn fake_sites.app:app --port 8001` и `uv run --directory backend python -m app.worker.once` (поставить и выполнить один прогон без воркера). Новая миграция: `uv run --directory backend alembic revision --autogenerate -m "..."`, затем проверить и поправить файл (типы enum в `downgrade` удаляются вручную).
 

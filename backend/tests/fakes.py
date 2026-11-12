@@ -1,9 +1,8 @@
 """Test doubles of sources and transports."""
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 
 import httpx
-from fake_sites.catalog import Site, search
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -11,17 +10,25 @@ from app.db.enums import Source, SourceErrorKind
 from app.parsers.base import ParsedOffer, SourceError
 
 
-class CatalogJsonSource:
-    """Stands in for the JSON API source (step 5): the JSON listings of fake-sites."""
+class FakeClock:
+    """A clock whose ``sleep`` only records the pause and moves time forward.
 
-    source = Source.JSON_API
+    ``on_sleep`` runs after each pause, e.g. to let the site recover meanwhile.
+    """
 
-    async def fetch_offers(self, articles: Sequence[str]) -> list[ParsedOffer]:
-        return [
-            ParsedOffer(item.brand, item.article, item.price, item.stock, item.delivery_days)
-            for article in articles
-            for item in search(Site.JSON, article)
-        ]
+    def __init__(self, on_sleep: Callable[[float], Awaitable[None]] | None = None) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+        self._on_sleep = on_sleep
+
+    def monotonic(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+        if self._on_sleep is not None:
+            await self._on_sleep(seconds)
 
 
 class FailingSource:

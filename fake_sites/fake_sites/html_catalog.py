@@ -63,3 +63,45 @@ def render_search_page(query: str, listings: list[Listing]) -> str:
 </body>
 </html>
 """
+
+
+def render_changed_search_page(query: str, listings: list[Listing]) -> str:
+    """``markup_changed``: a redesigned page with product cards instead of the table.
+
+    There is no ``#offers`` block and no ``.price``/``.stock``/``.delivery``
+    cells, so a parser bound to the old markup cannot find its required fields.
+    """
+    cards = "\n".join(
+        '<div class="product-card">'
+        f'<span class="product-card__title">{escape(item.brand)} {escape(item.article)}</span>'
+        f'<span class="product-card__cost">{format_price(item.price)}</span>'
+        "</div>"
+        for item in listings
+    )
+    return f"""<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Каталог запчастей — новый дизайн</title></head>
+<body>
+<h1>Нашли по запросу «{escape(query)}»</h1>
+<div class="catalog-results">
+{cards}
+</div>
+</body>
+</html>
+"""
+
+
+def render_captcha_page() -> str:
+    """``blocked``: what the site shows instead of the result (served with HTTP 403)."""
+    return """<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Проверка: вы не робот?</title></head>
+<body>
+<form class="captcha" method="post" action="/html/captcha">
+<p>Подтвердите, что вы не робот</p>
+<img src="/html/captcha.png" alt="captcha">
+<input name="answer"><button type="submit">Отправить</button>
+</form>
+</body>
+</html>
+"""

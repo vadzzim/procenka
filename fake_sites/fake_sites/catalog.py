@@ -5,11 +5,11 @@ The listings follow the "Ожидаемые предложения" table of ``d
 marketplace would, not the way the price list does, so the backend's
 normalization is visible. Every listing is in stock and ships within 14 days.
 
-Only the HTML catalog serves its listings so far; the JSON API (step 5) reads
-the ``JSON`` rows of the same table.
+The HTML catalog serves the ``HTML`` rows, the JSON API the ``JSON`` rows.
+In ``price_spike`` mode a source sells the control product S for 1 500.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from enum import StrEnum
 
@@ -114,11 +114,23 @@ LISTINGS: tuple[Listing, ...] = (
 )
 
 
-def search(site: Site, article: str) -> list[Listing]:
-    """Listings of ``site`` whose normalized article equals the normalized query."""
+# The price_spike control product (MANN-FILTER W71275) and its price in that mode.
+SPIKE_ARTICLE = "W71275"
+SPIKE_PRICE = Decimal("1500.00")
+
+
+def search(site: Site, article: str, *, price_spike: bool = False) -> list[Listing]:
+    """Listings of ``site`` whose normalized article equals the normalized query.
+
+    With ``price_spike`` the control product S costs ``SPIKE_PRICE``; nothing
+    else changes.
+    """
     wanted = normalize_article(article)
     if not wanted:
         return []
-    return [
+    found = [
         item for item in LISTINGS if item.site is site and normalize_article(item.article) == wanted
     ]
+    if price_spike and wanted == SPIKE_ARTICLE:
+        found = [replace(item, price=SPIKE_PRICE) for item in found]
+    return found

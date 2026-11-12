@@ -33,9 +33,66 @@ def parse_price(text: str, *, field: str = "цена") -> Decimal:
     value = value.removesuffix(RUBLE_SIGN).replace(",", ".")
     if not _NUMBER.fullmatch(value):
         raise structure_error(f"не удалось разобрать поле «{field}»: {text!r}")
+    return _checked_price(value, text, field)
+
+
+# An API price: digits, optionally a dot and decimals; no sign, spaces or exponent.
+_API_PRICE = re.compile(r"\d+(\.\d+)?", re.ASCII)
+
+
+def parse_api_price(value: object, *, field: str = "цена") -> Decimal:
+    """A price from a JSON API: a string like ``"1250.00"``, nothing else.
+
+    A JSON number is rejected even when it looks exact: the contract sends
+    money as strings, and a float would already have lost precision.
+    """
+    if value is None:
+        raise structure_error(f"нет обязательного поля «{field}»")
+    if not isinstance(value, str):
+        raise structure_error(
+            f"поле «{field}» должно быть строкой, получено {_json_type(value)}: {value}"
+        )
+    if not _API_PRICE.fullmatch(value):
+        raise structure_error(f"не удалось разобрать поле «{field}»: {value!r}")
+    return _checked_price(value, value, field)
+
+
+def parse_api_count(value: object, *, field: str) -> int:
+    """A count from a JSON API: a non-negative JSON integer that fits INTEGER."""
+    if value is None:
+        raise structure_error(f"нет обязательного поля «{field}»")
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise structure_error(
+            f"поле «{field}» должно быть целым числом, получено {_json_type(value)}: {value!r}"
+        )
+    if value < 0:
+        raise structure_error(f"отрицательное значение в поле «{field}»: {value}")
+    if value > MAX_COUNT:
+        raise structure_error(f"слишком большое значение в поле «{field}»: {value}")
+    return value
+
+
+def _json_type(value: object) -> str:
+    match value:
+        case bool():
+            return "логическое значение"
+        case int() | Decimal() | float():
+            return "число"
+        case str():
+            return "строка"
+        case list():
+            return "список"
+        case dict():
+            return "объект"
+        case _:
+            return type(value).__name__
+
+
+def _checked_price(value: str, text: str, field: str) -> Decimal:
+    """``value`` is a plain number; ``text`` is what the site showed (for messages)."""
     try:
         price = Decimal(value)
-    except InvalidOperation as exc:  # pragma: no cover - the regex admits only valid numbers
+    except InvalidOperation as exc:  # pragma: no cover - the regexes admit only valid numbers
         raise structure_error(f"не удалось разобрать поле «{field}»: {text!r}") from exc
     if price < 0:
         raise structure_error(f"отрицательное значение в поле «{field}»: {text!r}")

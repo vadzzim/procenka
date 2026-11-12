@@ -6,6 +6,7 @@ Values are the English codes kept in PostgreSQL enum types. Pricing codes
 """
 
 from enum import StrEnum
+from types import MappingProxyType
 
 
 class RunStatus(StrEnum):
@@ -49,3 +50,13 @@ class SourceErrorKind(StrEnum):
     NETWORK = "network"
     STRUCTURE = "structure"
     BLOCKED = "blocked"
+
+
+# The single table of Russian labels the UI shows for source error kinds.
+SOURCE_ERROR_LABELS: MappingProxyType[SourceErrorKind, str] = MappingProxyType(
+    {
+        SourceErrorKind.NETWORK: "недоступен",
+        SourceErrorKind.STRUCTURE: "изменилась структура",
+        SourceErrorKind.BLOCKED: "заблокирован",
+    }
+)

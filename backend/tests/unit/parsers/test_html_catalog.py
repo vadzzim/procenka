@@ -13,6 +13,7 @@ from fake_sites.catalog import LISTINGS, Site
 from app.db.enums import Source, SourceErrorKind
 from app.parsers.base import ParsedOffer, SourceError, collect
 from app.parsers.html_catalog import SEARCH_PATH, HtmlCatalogSource, parse_search_page
+from tests.fakes import FakeClock
 
 FIXTURES = Path(__file__).resolve().parents[2] / "data" / "html"
 BASE_URL = "http://fake-sites.test"
@@ -26,7 +27,10 @@ def _source(
     handler: Callable[[httpx.Request], httpx.Response], *, concurrency: int = 4
 ) -> HtmlCatalogSource:
     return HtmlCatalogSource(
-        BASE_URL, transport=httpx.MockTransport(handler), concurrency=concurrency
+        BASE_URL,
+        transport=httpx.MockTransport(handler),
+        concurrency=concurrency,
+        clock=FakeClock(),
     )
 
 
@@ -111,6 +115,7 @@ async def test_source_requests_every_article_and_returns_all_offers() -> None:
         (503, SourceErrorKind.NETWORK),
         (404, SourceErrorKind.STRUCTURE),
         (301, SourceErrorKind.STRUCTURE),
+        (401, SourceErrorKind.STRUCTURE),
     ],
 )
 async def test_http_status_maps_to_error_kind(status: int, kind: SourceErrorKind) -> None:

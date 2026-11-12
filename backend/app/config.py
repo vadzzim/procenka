@@ -11,6 +11,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.db.enums import Source
+from app.parsers.http import RetryPolicy
 from app.pricing.models import GlobalSettings
 
 DEFAULT_DATABASE_URL = "postgresql+asyncpg://procenka:procenka@localhost:54329/procenka"
@@ -35,17 +36,32 @@ class Settings(BaseSettings):
     source_time_budget_seconds: float = Field(default=30.0, gt=0)
 
     # Sources collected in every run, in this order (ENABLED_SOURCES='["html_catalog"]').
-    enabled_sources: tuple[Source, ...] = Field(default=(Source.HTML_CATALOG,), min_length=1)
+    enabled_sources: tuple[Source, ...] = Field(
+        default=(Source.HTML_CATALOG, Source.JSON_API), min_length=1
+    )
     # Base URL of the fake-sites service that hosts both synthetic sources.
     fake_sites_url: str = DEFAULT_FAKE_SITES_URL
-    # Optional proxy of the HTML catalog source, passed to httpx.AsyncClient.
+    # Optional proxy of each source, passed to httpx.AsyncClient.
     html_catalog_proxy: str | None = None
+    json_api_proxy: str | None = None
     # Timeout of one HTTP request to a source and the number of concurrent requests per source.
     source_request_timeout_seconds: float = Field(default=5.0, gt=0)
     source_concurrency: int = Field(default=4, ge=1)
+    # Network failures (timeout, connection error, 5xx): attempts in total and the pause.
+    source_retry_attempts: int = Field(default=3, ge=1)
+    source_retry_pause_seconds: float = Field(default=1.0, ge=0)
+    # Retries after HTTP 429 (each after Retry-After, if it fits into the time budget).
+    source_rate_limit_retries: int = Field(default=2, ge=0)
 
     # How long the worker sleeps when there is no queued run.
     worker_poll_interval_seconds: float = Field(default=1.0, gt=0)
+
+    def retry_policy(self) -> RetryPolicy:
+        return RetryPolicy(
+            attempts=self.source_retry_attempts,
+            pause_seconds=self.source_retry_pause_seconds,
+            rate_limit_retries=self.source_rate_limit_retries,
+        )
 
     def global_settings(self) -> GlobalSettings:
         return GlobalSettings(

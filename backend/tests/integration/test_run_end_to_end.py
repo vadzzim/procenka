@@ -35,14 +35,15 @@ from app.db.seed_data import (
 )
 from app.parsers.base import OfferSource
 from app.parsers.html_catalog import HtmlCatalogSource
+from app.parsers.json_api import JsonApiSource
 from app.pricing.models import ResultReason, ResultState
 from app.pricing.normalize import normalize_article, normalize_brand
 from app.worker.execute import RunNotRunningError, execute_run
 from app.worker.loop import process_next_run
 from tests.fakes import (
     OPEN_TRANSACTIONS_SQL,
-    CatalogJsonSource,
     FailingSource,
+    FakeClock,
     TransactionCheckingTransport,
 )
 from tests.unit.db.test_seed_consistency import OTHER_PLAN
@@ -59,6 +60,15 @@ def _html_source(transport: httpx.AsyncBaseTransport | None = None) -> HtmlCatal
     return HtmlCatalogSource(
         "http://fake-sites.test",
         transport=transport or httpx.ASGITransport(app=create_fake_sites_app()),
+        clock=FakeClock(),
+    )
+
+
+def _json_source(transport: httpx.AsyncBaseTransport | None = None) -> JsonApiSource:
+    return JsonApiSource(
+        "http://fake-sites.test",
+        transport=transport or httpx.ASGITransport(app=create_fake_sites_app()),
+        clock=FakeClock(),
     )
 
 
@@ -109,7 +119,7 @@ async def test_manual_run_publishes_product_a_at_1240(
     checking = TransactionCheckingTransport(
         httpx.ASGITransport(app=create_fake_sites_app()), monitor_engine
     )
-    sources: list[OfferSource] = [_html_source(checking), CatalogJsonSource()]
+    sources: list[OfferSource] = [_html_source(checking), _json_source(checking)]
 
     run_id = await _start_run(api)
     outcome = await process_next_run(session_factory, sources, SETTINGS)
@@ -119,9 +129,10 @@ async def test_manual_run_publishes_product_a_at_1240(
     assert outcome.status is RunStatus.SUCCEEDED
     assert outcome.calculations == len(SEED_PRODUCTS)
 
-    # No database transaction was open during any HTTP request.
+    # No database transaction was open during any HTTP request: one per article
+    # and source, plus the JSON storefront page that opens the session.
     articles = {normalize_article(item.article) for item in SEED_PRODUCTS}
-    assert len(checking.open_transactions) == len(articles)
+    assert len(checking.open_transactions) == 2 * len(articles) + 1
     assert set(checking.open_transactions) == {0}
 
     # The run and its sources.
@@ -259,7 +270,7 @@ async def test_huge_stock_fails_the_source_not_the_run(
     run_id = await _start_run(api)
 
     outcome = await process_next_run(
-        session_factory, [_html_source(transport), CatalogJsonSource()], SETTINGS
+        session_factory, [_html_source(transport), _json_source()], SETTINGS
     )
 
     assert outcome is not None
@@ -287,14 +298,6 @@ async def test_html_source_alone_publishes_product_a_at_1240(
             Decimal("1240.00"),
         )
         assert {o["source"] for o in a_calc.accepted_offers} == {"html_catalog"}
-        # The shipped step-4 configuration has no JSON source, where the minimum of S
-        # (2 000) lives: HTML alone gives 2 100 - 10 = 2 090 (+5.0 %), published.
-        # With the JSON source (step 5) S stays at 1 990 (the test above).
-        spike_calc = await _calculation(session, run_id, PRODUCT_SPIKE)
-        assert (spike_calc.state, spike_calc.recommended_price) == (
-            ResultState.PUBLISHED,
-            Decimal("2090.00"),
-        )
     prices = (await api.get("/api/published-prices")).json()["prices"]
     assert {"price": "1240.00", "calculation_id": a_calc.id}.items() <= next(
         p for p in prices if p["product_id"] == a_calc.product_id
@@ -308,7 +311,7 @@ async def test_one_source_failed_gives_partial_run(
     run_id = await _start_run(api)
     sources: list[OfferSource] = [
         _html_source(_failing_transport(503)),
-        CatalogJsonSource(),
+        _json_source(),
     ]
     outcome = await process_next_run(session_factory, sources, SETTINGS)
 

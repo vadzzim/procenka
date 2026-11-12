@@ -5,6 +5,9 @@ from pydantic import ValidationError
 
 from app.config import DEFAULT_DATABASE_URL, Settings
 from app.db.enums import Source
+from app.parsers.html_catalog import HtmlCatalogSource
+from app.parsers.http import RetryPolicy
+from app.parsers.json_api import JsonApiSource
 from app.parsers.registry import build_sources
 
 
@@ -35,13 +38,27 @@ def test_factor_must_fit_the_snapshot_column(monkeypatch: pytest.MonkeyPatch, fa
 
 
 def test_source_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("ENABLED_SOURCES", "FAKE_SITES_URL", "HTML_CATALOG_PROXY"):
+    for name in (
+        "ENABLED_SOURCES",
+        "FAKE_SITES_URL",
+        "HTML_CATALOG_PROXY",
+        "JSON_API_PROXY",
+        "SOURCE_RETRY_ATTEMPTS",
+        "SOURCE_RETRY_PAUSE_SECONDS",
+        "SOURCE_RATE_LIMIT_RETRIES",
+    ):
         monkeypatch.delenv(name, raising=False)
     settings = Settings()
-    assert settings.enabled_sources == (Source.HTML_CATALOG,)
+    assert settings.enabled_sources == (Source.HTML_CATALOG, Source.JSON_API)
     assert settings.fake_sites_url == "http://localhost:8001"
     assert settings.html_catalog_proxy is None
+    assert settings.json_api_proxy is None
     assert settings.source_concurrency >= 1
+    assert settings.retry_policy() == RetryPolicy(
+        attempts=3, pause_seconds=1.0, rate_limit_retries=2
+    )
+    sources = build_sources(settings)
+    assert [type(source) for source in sources] == [HtmlCatalogSource, JsonApiSource]
 
 
 def test_sources_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -61,7 +78,31 @@ def test_invalid_sources_are_rejected(monkeypatch: pytest.MonkeyPatch, value: st
         Settings()
 
 
-def test_json_source_is_not_available_yet() -> None:
-    settings = Settings(enabled_sources=(Source.JSON_API,))
-    with pytest.raises(ValueError, match="step 5"):
-        build_sources(settings)
+def test_retry_settings_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SOURCE_RETRY_ATTEMPTS", "5")
+    monkeypatch.setenv("SOURCE_RETRY_PAUSE_SECONDS", "0.5")
+    monkeypatch.setenv("SOURCE_RATE_LIMIT_RETRIES", "0")
+    monkeypatch.setenv("SOURCE_TIME_BUDGET_SECONDS", "10")
+    monkeypatch.setenv("JSON_API_PROXY", "http://proxy:3128")
+    monkeypatch.setenv("ENABLED_SOURCES", '["json_api"]')
+    settings = Settings()
+    assert settings.retry_policy() == RetryPolicy(
+        attempts=5, pause_seconds=0.5, rate_limit_retries=0
+    )
+    [source] = build_sources(settings)
+    assert isinstance(source, JsonApiSource)
+    assert source._budget_seconds == 10
+    assert source._retry_policy == settings.retry_policy()
+    assert source._proxy == "http://proxy:3128"
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [("SOURCE_RETRY_ATTEMPTS", "0"), ("SOURCE_RETRY_PAUSE_SECONDS", "-1")],
+)
+def test_invalid_retry_settings_are_rejected(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValidationError):
+        Settings()
