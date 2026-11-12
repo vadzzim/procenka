@@ -175,3 +175,57 @@
 - Seed не обновляет настройки уже существующих товаров при изменении `seed_data.py` — для этого есть reset.
 - Reset делает `TRUNCATE` (блокировка ACCESS EXCLUSIVE): если воркер в этот момент держит прогон, reset его дождётся. Как reset из API (шаг 7) взаимодействует с активным прогоном, решают шаги 6–7.
 - Сериализацию предложений в JSONB расчёта (формат описан в docstring `models.py`) реализует шаг 4.
+
+## Шаг 4. Тонкий сквозной срез
+
+### Что сделано
+
+- `fake_sites/` — отдельный uv-проект (FastAPI, `pyproject.toml`, `uv.lock`, Dockerfile, свои тесты):
+  - `catalog.py` — одна таблица предложений для обоих источников (`Site.HTML` / `Site.JSON`) строго по таблице «Ожидаемые предложения» шага 3, с «грязными» написаниями брендов и артикулов; поиск по нормализованному артикулу (только буквы и цифры, верхний регистр);
+  - `html_catalog.py` + `GET /html/search?article=…` — страница поиска: `section#offers`, строки `tr.offer` с ячейками `.brand`, `.article`, `.price` (`1 250,00 ₽` с неразрывными пробелами), `.stock` (`12 шт.`), `.delivery` (`1 дн.`); пустой результат — `p.no-results` внутри `#offers` без строк.
+- Backend подключает `fake_sites` как dev-зависимость по пути (editable); тесты ходят в настоящее приложение через `httpx.ASGITransport`.
+- `backend/app/parsers/`:
+  - `base.py` — общий интерфейс: `OfferSource.fetch_offers(articles)` возвращает список `ParsedOffer` или бросает `SourceError(kind, message)` с типом `SourceErrorKind`; `collect()` превращает ошибку в `SourceCollection` (предложения или ошибка, не оба); `collect_all()` собирает источники параллельно; `gather_per_article()` — запросы по артикулам параллельно с семафором, первая ошибка источника отменяет остальные запросы;
+  - `fields.py` — строгий разбор цены (`Decimal`, пробелы и неразрывные пробелы, запятая, знак ₽) и количеств; пустое поле, нераспознанный формат, отрицательное значение, больше двух знаков после запятой, выход цены за `NUMERIC(12,2)`, а остатка или срока — за `INTEGER` — ошибка структуры (иначе запись предложения упала бы и обрушила весь прогон, а не один источник);
+  - `html_catalog.py` — `HtmlCatalogSource` на selectolax и `httpx.AsyncClient` (прокси, таймаут запроса, ограничение параллельности — из настроек); `registry.py` — набор источников из `ENABLED_SOURCES`.
+- `backend/app/db/runs.py` — `enqueue_run` (`INSERT … ON CONFLICT DO NOTHING` на `uq_runs_single_active`, затем select активного прогона; повтор, если активный успел завершиться) и `claim_next_run` (`FOR UPDATE SKIP LOCKED`, перевод в running, коммит).
+- `backend/app/worker/`:
+  - `execute.py` — `execute_run(session_factory, run_id, sources, global_settings=…)`: короткая читающая транзакция за артикулами → сбор всех источников без сессии БД → транзакция 1: `source_results`, предложения одной пакетной вставкой, расчёт каждого товара по предложениям этого прогона с тем же нормализованным артикулом, запись расчётов (JSONB по формату docstring `models.py`, деньги строками) → транзакция 2: завершение прогона (`UPDATE … WHERE status = 'running'`) и публикация расчётов в состоянии `published` через `INSERT … ON CONFLICT (product_id) DO UPDATE` с `calculation_id`;
+  - `loop.py` + `python -m app.worker` — цикл воркера с паузой `WORKER_POLL_INTERVAL_SECONDS`; `python -m app.worker.once` — поставить и выполнить один прогон без воркера.
+- `backend/app/api/` — FastAPI: `POST /api/runs` (201 — новый прогон, 200 — уже есть queued/running, возвращается его id), `GET /api/runs/{id}` (статус и результаты источников), `GET /api/published-prices` (только `published_prices`: id, нормализованные бренд и артикул, название, цена строкой, `published_at`, `calculation_id`, у seed-цен `null`).
+- Настройки (`app/config.py`): `ENABLED_SOURCES` (по умолчанию `["html_catalog"]`), `FAKE_SITES_URL`, `HTML_CATALOG_PROXY`, `SOURCE_REQUEST_TIMEOUT_SECONDS` (5), `SOURCE_CONCURRENCY` (4), `WORKER_POLL_INTERVAL_SECONDS` (1). `RunFinishReason`: добавлены `all_sources_failed` и `internal_error`.
+- Compose (`deploy/compose.yaml`): `fake-sites` (порт `127.0.0.1:8001`), `api` (`127.0.0.1:8000`; entrypoint `backend/docker/api-entrypoint.sh`: `alembic upgrade head` → seed → uvicorn; healthcheck запросом `GET /api/published-prices`), `worker` (тот же образ `procenka-backend`, стартует после healthy api и fake-sites). Dev-зависимости, включая `fake_sites`, в образ не ставятся.
+- Тесты backend:
+  - `tests/unit/parsers/test_fields.py`, `tests/unit/parsers/test_html_catalog.py` и фикстуры `tests/data/html/`: корректная страница (с `&nbsp;`), «ничего не найдено», нет поля или пустое поле, неразбираемая цена, 3 знака, отрицательные цена и остаток, чужой формат цены, сменившаяся разметка, пустой контейнер, строки вместе с маркером «ничего не найдено» → structure; 403/429 → blocked; 500/502/503, таймауты, ошибки соединения и прокси → network; 404/301 → structure; ошибка на одном артикуле — весь источник failed без предложений; ограничение параллельности; прокси и таймаут доходят до клиента; посторонние исключения не маскируются под ошибку источника; каждое HTML-предложение fake-sites разбирается точно;
+  - `tests/unit/test_fake_sites_catalog.py` — каталог fake-sites через ядро даёт план шага 3 для каждого товара в каждом источнике отдельно и вместе;
+  - `tests/integration/test_run_end_to_end.py` — seed → `POST /api/runs` → `process_next_run` с HTML-парсером против fake-sites (ASGI): A опубликован по 1 240.00 с `calculation_id` этого прогона, учтено 1 250, отброшены «другой бренд» и «подозрительно низкая цена»; S — 1 990 «без изменений»; товар без опубликованной цены — карантин и в `published_prices` не появился; все остальные товары по плану; `GET /api/published-prices` — `"1240.00"` строкой, карантинной рекомендации нет. Плюс: только HTML-источник → A 1 240; один источник упал → partial с `partial_data`; оба упали → failed, `published_prices` и выдача API не изменились, предложений и расчётов нет; ошибка структуры не становится ценой; прогон, который уже не running, ничего не публикует; неожиданное исключение → failed `internal_error`;
+  - проверка «во время HTTP транзакция не открыта»: транспорт-обёртка перед каждым запросом смотрит `pg_stat_activity` (клиентские сессии базы, кроме своих мониторных соединений, с `xact_start IS NOT NULL`) — во всех 25 запросах 0; отдельный тест показывает, что проверка видит транзакцию, открытую во время запроса;
+  - `tests/integration/test_runs_api.py` — повторный `POST` возвращает тот же id (queued и running), 8 одновременных `POST` создают один прогон, после завершения создаётся новый; `GET` прогона и 404; `claim` берёт прогон один раз и пропускает заблокированный (SKIP LOCKED); выдача seed-цен.
+- Тесты fake_sites: каталог (наличие, срок, цены с 2 знаками, поиск по нормализованному артикулу, пустой поиск), формат цены, страница с предложениями, страница «ничего не найдено», экранирование запроса.
+- `AGENTS.md`: команды проверки для `fake_sites`, запуск демо в compose и ручной прогон.
+
+### Ручная проверка в compose
+
+`docker compose up --build -d` поднял postgres, fake-sites, api (healthy после миграций и seed), worker. Затем `python -m app.db.reset` в контейнере api, `POST /api/runs` → `{"id":1,"status":"queued","created":true}` (201), повторный → `{"id":1,…,"created":false}` (200); через секунду `GET /api/runs/1` → `succeeded`, `html_catalog` ok, 26 предложений; `GET /api/published-prices` → `{"product_id":1,"brand":"Bosch","article":"0986452041",…,"price":"1240.00","calculation_id":1}`. Лог воркера: `run 1 finished: succeeded, 25 calculations, 12 published`. После проверки — reset и `docker compose down` (том оставлен).
+
+### Решения
+
+- Частичных результатов источника нет: ошибка на любом артикуле делает весь источник failed в этом прогоне, предложения источника не пишутся. Иначе товары, на которых источник упал, тихо считались бы без него, а флаг частичных данных стоял бы не там.
+- Источник ищет по каждому различному нормализованному артикулу товаров один раз. Предложение пишется один раз; `offers.product_id` ставится только при точном совпадении нормализованной пары бренд+артикул (у `MANN 0986452041` — NULL). В расчёт товара идут все предложения прогона с его нормализованным артикулом: «другой бренд» отбрасывает и объясняет ядро.
+- HTTP-статусы без повторов: таймаут, ошибка соединения или прокси и 5xx → network; 403 и 429 → blocked; прочие не-200 (404, редиректы — `follow_redirects=False`) → structure: площадка отвечает не так, как ожидает парсер. Ошибка декодирования ответа → structure. Посторонние исключения (ошибки кода) не маскируются под ошибку источника: воркер переводит прогон в failed с `finish_reason = internal_error`.
+- Сообщения ошибок источников — на русском (их увидит менеджер), с артикулом, на котором произошёл сбой.
+- Все источники упали → прогон failed, `finish_reason = all_sources_failed`; пишутся только `source_results`, расчётов и предложений нет, опубликованные цены не меняются.
+- Транзакция 2 завершает прогон условием `status = 'running'`; если прогон уже не running (шаг 6: interrupted), публикация откатывается и бросается `RunNotRunningError`. Результаты транзакции 1 при этом остаются как история.
+- `published_at` у опубликованной цены и `finished_at` прогона — `now()` транзакции 2, то есть совпадают.
+- Деньги в API — `Decimal`, сериализуемый строкой (`"1240.00"`); значения из `NUMERIC(12,2)` всегда с двумя знаками.
+- `POST /api/runs`: `ON CONFLICT DO NOTHING` без цели — у `runs` нет других уникальных ограничений, кроме ключа и `uq_runs_single_active`.
+
+### Отступления от plan.md
+
+- На этом шаге включён только HTML-источник (`ENABLED_SOURCES=["html_catalog"]`). Минимальное предложение контрольного товара S (2 000) лежит в JSON-источнике, поэтому настоящий прогон в compose до шага 5 публикует S по 2 090 (HTML 2 100 − 10, +5,0 %, ниже порога), а не оставляет 1 990. Интеграционный тест «S — 1 990 без изменений» использует тестовый источник `json_api` (`tests/fakes.py: CatalogJsonSource`), отдающий JSON-строки каталога fake-sites через тот же интерфейс `OfferSource`. После шага 5 это станет настоящим JSON-парсером. Реальное поведение поставляемой конфигурации закреплено тестом `test_html_source_alone_publishes_product_a_at_1240`: только HTML → A 1 240 «опубликована», S 2 090 «опубликована». Этот разрыв между таблицей «Ожидаемые предложения» и критерием «S — 1 990 без изменений» на шаге 4 вынесен прорабу.
+
+### Долги
+
+- Шаг 5: JSON-источник с сессией (данные уже в `fake_sites/catalog.py`, `Site.JSON`), режимы сбоев, повторы, Retry-After, бюджет времени `SOURCE_TIME_BUDGET_SECONDS` (пока не используется), включить `json_api` в `ENABLED_SOURCES` по умолчанию.
+- Шаг 6: восстановление running → failed `interrupted` при старте воркера, расписание. Сейчас прогон, оставшийся в running после падения воркера, блокирует новые до шага 6 (`POST /api/runs` возвращает его id).
+- Шаг 7: `/health` (healthcheck api пока ходит в `/api/published-prices`), structlog вместо `logging`, остальные эндпоинты экрана.

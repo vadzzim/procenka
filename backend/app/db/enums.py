@@ -26,9 +26,13 @@ class RunTrigger(StrEnum):
 
 
 class RunFinishReason(StrEnum):
-    """Why a run ended the way it did. Only ``interrupted`` is fixed so far."""
+    """Why a run ended the way it did; empty for a normal finish."""
 
     INTERRUPTED = "interrupted"
+    # Every source failed: nothing was calculated and published prices stay as they were.
+    ALL_SOURCES_FAILED = "all_sources_failed"
+    # An unexpected error in the worker (a bug), not a source error.
+    INTERNAL_ERROR = "internal_error"
 
 
 class Source(StrEnum):

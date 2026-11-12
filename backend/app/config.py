@@ -10,9 +10,11 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.db.enums import Source
 from app.pricing.models import GlobalSettings
 
 DEFAULT_DATABASE_URL = "postgresql+asyncpg://procenka:procenka@localhost:54329/procenka"
+DEFAULT_FAKE_SITES_URL = "http://localhost:8001"
 
 
 class Settings(BaseSettings):
@@ -31,6 +33,19 @@ class Settings(BaseSettings):
 
     # Time budget for collecting one source, including pauses between retries.
     source_time_budget_seconds: float = Field(default=30.0, gt=0)
+
+    # Sources collected in every run, in this order (ENABLED_SOURCES='["html_catalog"]').
+    enabled_sources: tuple[Source, ...] = Field(default=(Source.HTML_CATALOG,), min_length=1)
+    # Base URL of the fake-sites service that hosts both synthetic sources.
+    fake_sites_url: str = DEFAULT_FAKE_SITES_URL
+    # Optional proxy of the HTML catalog source, passed to httpx.AsyncClient.
+    html_catalog_proxy: str | None = None
+    # Timeout of one HTTP request to a source and the number of concurrent requests per source.
+    source_request_timeout_seconds: float = Field(default=5.0, gt=0)
+    source_concurrency: int = Field(default=4, ge=1)
+
+    # How long the worker sleeps when there is no queued run.
+    worker_poll_interval_seconds: float = Field(default=1.0, gt=0)
 
     def global_settings(self) -> GlobalSettings:
         return GlobalSettings(

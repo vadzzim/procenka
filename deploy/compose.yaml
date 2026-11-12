@@ -1,3 +1,7 @@
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-procenka}:${POSTGRES_PASSWORD:-procenka}@postgres:5432/${POSTGRES_DB:-procenka}
+  FAKE_SITES_URL: http://fake-sites:8001
+
 services:
   postgres:
     image: postgres:16
@@ -16,6 +20,46 @@ services:
       timeout: 5s
       retries: 30
       start_period: 5s
+
+  fake-sites:
+    build: ../fake_sites
+    ports:
+      - "127.0.0.1:${FAKE_SITES_HOST_PORT:-8001}:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/html/search?article=1')"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 3s
+
+  api:
+    build: ../backend
+    image: procenka-backend
+    environment: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
+    healthcheck:
+      # Migrations and seed are done once the API answers.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/published-prices')"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      start_period: 5s
+
+  worker:
+    # Same image as api (built once, cached for the second service).
+    build: ../backend
+    image: procenka-backend
+    command: ["python", "-m", "app.worker"]
+    environment: *backend-env
+    depends_on:
+      api:
+        condition: service_healthy
+      fake-sites:
+        condition: service_healthy
 
 volumes:
   postgres-data:

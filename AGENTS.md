@@ -18,7 +18,7 @@
 
 Заполняются на шаге 1 и поддерживаются в актуальном виде. Шаг считается готовым, только если все они зелёные.
 
-Все команды запускаются из корня репозитория (PowerShell и Git Bash одинаково). Python-проект лежит в `backend/`, поэтому uv вызывается с `--directory backend`.
+Все команды запускаются из корня репозитория (PowerShell и Git Bash одинаково). Python-проектов два: `backend/` и `fake_sites/` (синтетические площадки), поэтому uv вызывается с `--directory`.
 
 ```sh
 docker compose up -d --wait postgres
@@ -26,8 +26,14 @@ uv run --directory backend ruff check
 uv run --directory backend ruff format --check
 uv run --directory backend mypy
 uv run --directory backend pytest
+uv run --directory fake_sites ruff check
+uv run --directory fake_sites ruff format --check
+uv run --directory fake_sites mypy
+uv run --directory fake_sites pytest
 docker compose config --quiet
 ```
+
+- `fake_sites` подключён к backend как dev-зависимость по пути (editable): тесты backend ходят в настоящее приложение fake-sites через `httpx.ASGITransport`, без сети и без запущенного контейнера.
 
 - `pytest` гоняет и unit-, и интеграционные тесты (маркер `integration`). Если PostgreSQL недоступен, интеграционные тесты падают, а не пропускаются.
 - Интеграционные тесты берут URL из `TEST_DATABASE_URL`, по умолчанию `postgresql+asyncpg://procenka:procenka@localhost:54329/procenka_test`, и сами создают базу `procenka_test`, если её нет. Порт postgres на хосте — `POSTGRES_HOST_PORT` (по умолчанию 54329); пример переменных — `.env.example`.
@@ -45,7 +51,19 @@ uv run --directory backend python -m app.db.seed     # загрузить дем
 uv run --directory backend python -m app.db.reset    # очистить всё и вернуть точное состояние seed
 ```
 
-Команды seed и reset миграции не применяют. Новая миграция: `uv run --directory backend alembic revision --autogenerate -m "..."`, затем проверить и поправить файл (типы enum в `downgrade` удаляются вручную).
+Команды seed и reset миграции не применяют.
+
+Запуск всего демо и ручной прогон:
+
+```sh
+docker compose up --build -d                       # postgres, fake-sites, api (миграции и seed при старте), worker
+curl -X POST http://127.0.0.1:8000/api/runs         # поставить прогон; повторный запрос вернёт тот же id
+curl http://127.0.0.1:8000/api/runs/<id>            # статус прогона и источников
+curl http://127.0.0.1:8000/api/published-prices     # опубликованные цены
+docker compose exec api python -m app.db.reset      # вернуть демо в состояние seed
+```
+
+Без контейнеров api и worker: `uv run --directory backend uvicorn app.api.main:app`, `uv run --directory fake_sites uvicorn fake_sites.app:app --port 8001` и `uv run --directory backend python -m app.worker.once` (поставить и выполнить один прогон без воркера). Новая миграция: `uv run --directory backend alembic revision --autogenerate -m "..."`, затем проверить и поправить файл (типы enum в `downgrade` удаляются вручную).
 
 ## Соглашения
 
