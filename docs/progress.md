@@ -705,3 +705,39 @@ Codex `gpt-6-astra`, тред `thr_p3hsp6t44j`, 1 раунд, итог — «п�
 
 - `settings_changed` и `published_changed` — дополнительные к названным в расширении 1 условия «иначе требуется новый расчёт».
 - Видео в README снято до расширения 1 (кнопки в нём нет) — указано в README; перезапись не входила в шаг.
+
+## Шаг 12. Расширение 4 «CI на GitHub Actions»
+
+### Что сделано
+
+- **`.github/workflows/ci.yml`**: триггеры — push и pull request в `main`, `workflow_dispatch`; `concurrency` по `github.ref` с отменой устаревших прогонов; `permissions: contents: read`; секретов нет. Четыре параллельные джобы на `ubuntu-latest` с `timeout-minutes`:
+  - `backend` — service container `postgres:16` (healthcheck `pg_isready`, порт 54329 → 5432, как у compose), `TEST_DATABASE_URL` на него; `uv sync --locked`, затем ровно команды из AGENTS.md: ruff check (с `../scripts`), ruff format --check, mypy, pytest. Актуальность `backend/openapi.json` проверяет `tests/unit/api/test_openapi.py`, отдельный шаг `python -m app.api.openapi --check` не нужен;
+  - `fake_sites` — ruff, ruff format --check, mypy, pytest;
+  - `frontend` — Node 24 (`actions/setup-node`, кэш npm по `frontend/package-lock.json`), `npm ci`, typecheck, lint, test, build, `gen:api:check`;
+  - `compose-e2e` — `docker compose config --quiet`, `uv sync --locked` backend (шаг 7 сценария запускает pytest подпроцессом — dev-зависимости нужны), `docker compose up --build -d --wait --wait-timeout 300`, `scripts/demo_scenario.py`; при падении — `docker compose ps -a` и `docker compose logs`, всегда — `docker compose down -v`.
+- **Скрипт приёмки** в конце печатает «Сценарий пройден: 8/8 шагов OK; …» (число шагов — из `STEPS`), чтобы итог был виден в логе CI одной строкой.
+- **Документация**: README — бейдж CI в начале, раздел «CI», расширение 4 отмечено сделанным; AGENTS.md — CI в «Командах проверки», итоговая строка скрипта в «Приёмке».
+
+### Решения
+
+- **`compose-e2e` — сверх буквы п. 4 `plan.md`** (там lint, mypy и тесты на PostgreSQL): решение прораба. Идёт параллельно с остальными джобами, а не после них: так общий прогон ~1 мин вместо ~2; зависимость ничего не экономит — джобы независимы.
+- **Версии actions**: `actions/checkout@v7`, `actions/setup-node@v7` — мажорные теги актуальных версий (на 2026-11-12: v7.0.1 и v7.1.0). `astral-sh/setup-uv` с v8 не публикует подвижных мажорных тегов (`@v10` → «unable to find version», первый прогон), поэтому закреплён полный тег `v10.3.3` (последний).
+- **uv в CI — 0.12**, как `ghcr.io/astral-sh/uv:0.12` в Dockerfile backend и fake_sites. С последним uv (0.13.7) `uv sync` предупреждал, что `build-system.requires = ["uv_build>=0.9,<0.13"]` fake_sites не включает текущую версию; одна минорная версия uv локально, в образах и в CI убирает расхождение.
+- Порт service container — 54329, как по умолчанию в compose: `TEST_DATABASE_URL` задан явно, но и значение по умолчанию из `tests/conftest.py` совпадает.
+- Linux-специфичных падений не нашлось: все джобы прошли со второго прогона (первый упал только на разрешении `setup-uv@v10`), код не менялся.
+
+### Прогоны GitHub Actions
+
+Проверка шла в ветке `ci/step-12` с временным триггером push на неё (убран перед слиянием):
+
+| Run | Итог | backend | fake_sites | frontend | compose-e2e |
+|---|---|---|---|---|---|
+| 43199968539 | failure: `astral-sh/setup-uv@v10` не найден | — | — | 50 с | — |
+| 43200330103 | success | 51 с | 17 с | 29 с | 64 с |
+| 43200649773 | success (uv 0.12) | 54 с | 14 с | 25 с | 66 с |
+
+В логе backend — `617 passed` (из них 123 интеграционных на PostgreSQL, `pytest -m integration --co`), fake_sites — `38 passed`, frontend — 35 тестов Vitest, `compose-e2e` — «ШАГ 1 … ШАГ 8 … OK» и «Сценарий пройден: 8/8 шагов OK». Прогон на `main` с коммитом шага — в отчёте шага.
+
+### Отступления от plan.md
+
+- `compose-e2e` (приёмочный сценарий на поднятом стеке) — сверх п. 4 «Расширений».

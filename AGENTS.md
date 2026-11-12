@@ -43,6 +43,8 @@ npm --prefix frontend run gen:api:check
 docker compose config --quiet
 ```
 
+- CI: GitHub Actions (`.github/workflows/ci.yml`) на push и pull request в `main` гоняет эти же команды в джобах `backend` (PostgreSQL 16 — service container, `TEST_DATABASE_URL` указывает на него), `fake_sites`, `frontend` и, кроме них, `compose-e2e` — скрипт приёмки на поднятом стеке (см. «Приёмка»). Шаг готов, когда и локальные команды, и CI на `main` зелёные: `gh run list --branch main`, `gh run watch <id>`, `gh run view <id> --log-failed`. Версии actions — закреплённые теги (`astral-sh/setup-uv` мажорных тегов не публикует — полный тег); uv в CI той же минорной версии, что в Dockerfile.
+
 - Фронтенд (`frontend/`): Vite + React + TypeScript (strict) + TanStack Query, npm с `package-lock.json`. Типы API — `frontend/src/api/schema.d.ts`, сгенерированный `openapi-typescript` из `backend/openapi.json` и закоммиченный; после регенерации `openapi.json` выполни `npm --prefix frontend run gen:api`, иначе `gen:api:check` падает. Тесты — Vitest + Testing Library (jsdom), фикстуры типизированы сгенерированными типами. Локальная разработка: `npm --prefix frontend run dev` (Vite проксирует `/api` и `/health` на `http://127.0.0.1:8000`, переопределяется `API_PROXY_TARGET`).
 
 - `scripts/` (скрипт приёмки) работает в окружении backend: ruff проверяет его по конфигурации backend (`scripts/ruff.toml` расширяет `backend/pyproject.toml`), mypy — через `files` в `backend/pyproject.toml`.
@@ -116,7 +118,7 @@ uv run --directory backend python ../scripts/demo_scenario.py                   
 uv run --directory backend python ../scripts/demo_scenario.py --base-url http://127.0.0.1:8080
 ```
 
-Печатает «ШАГ N … OK/FAIL» с ключевыми числами; при первом расхождении — FAIL и код 1, демо остаётся как есть. Перед шагом 2 сбрасывает демо (ждёт активный прогон), после шага 8 — снова сброс, поэтому повторяем. Шаг 8 подтверждает S (в выдаче 1490.00 с `calculation_id` этого расчёта), повторно — 409 `already_confirmed`, после нового прогона подтверждение старого расчёта Febi — 409 `superseded`. Шаг 7 запускает `tests/unit/pricing/test_control_cases.py` подпроцессом и проверяет строку `control cases: N matched, 0 mismatched`.
+Печатает «ШАГ N … OK/FAIL» с ключевыми числами, в конце — «Сценарий пройден: 8/8 шагов OK»; при первом расхождении — FAIL и код 1, демо остаётся как есть. Перед шагом 2 сбрасывает демо (ждёт активный прогон), после шага 8 — снова сброс, поэтому повторяем. Шаг 8 подтверждает S (в выдаче 1490.00 с `calculation_id` этого расчёта), повторно — 409 `already_confirmed`, после нового прогона подтверждение старого расчёта Febi — 409 `superseded`. Шаг 7 запускает `tests/unit/pricing/test_control_cases.py` подпроцессом и проверяет строку `control cases: N matched, 0 mismatched`.
 
 ## Соглашения
 

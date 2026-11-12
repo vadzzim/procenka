@@ -1,0 +1,126 @@
+# The same checks as "Команды проверки" in AGENTS.md, plus the acceptance
+# scenario (scripts/demo_scenario.py) on the whole compose stack.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: procenka
+          POSTGRES_PASSWORD: procenka
+          POSTGRES_DB: procenka
+        ports:
+          - 54329:5432
+        options: >-
+          --health-cmd "pg_isready -U procenka -d procenka"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      # Integration tests create procenka_test (and procenka_test_migrations) themselves.
+      TEST_DATABASE_URL: postgresql+asyncpg://procenka:procenka@localhost:54329/procenka_test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3  # no moving major tags since v8
+        with:
+          version: "0.12"  # same uv as backend/Dockerfile and fake_sites/Dockerfile
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install dependencies
+        run: uv sync --locked --directory backend
+      - name: Ruff check
+        run: uv run --locked --directory backend ruff check . ../scripts
+      - name: Ruff format
+        run: uv run --locked --directory backend ruff format --check . ../scripts
+      - name: Mypy
+        run: uv run --locked --directory backend mypy
+      # Unit and integration tests; integration tests fail (never skip) without
+      # PostgreSQL. backend/openapi.json freshness is checked by tests/unit/api/test_openapi.py.
+      - name: Pytest
+        run: uv run --locked --directory backend pytest
+
+  fake_sites:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3  # no moving major tags since v8
+        with:
+          version: "0.12"  # same uv as backend/Dockerfile and fake_sites/Dockerfile
+          enable-cache: true
+          cache-dependency-glob: fake_sites/uv.lock
+      - name: Install dependencies
+        run: uv sync --locked --directory fake_sites
+      - name: Ruff check
+        run: uv run --locked --directory fake_sites ruff check
+      - name: Ruff format
+        run: uv run --locked --directory fake_sites ruff format --check
+      - name: Mypy
+        run: uv run --locked --directory fake_sites mypy
+      - name: Pytest
+        run: uv run --locked --directory fake_sites pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm --prefix frontend ci
+      - run: npm --prefix frontend run typecheck
+      - run: npm --prefix frontend run lint
+      - run: npm --prefix frontend test
+      - run: npm --prefix frontend run build
+      - name: Generated API types match backend/openapi.json
+        run: npm --prefix frontend run gen:api:check
+
+  compose-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Compose config
+        run: docker compose config --quiet
+      # The acceptance script runs in the backend environment; its step 7 runs
+      # pytest (control cases) as a subprocess, so dev dependencies are needed.
+      - uses: astral-sh/setup-uv@v10.3.3  # no moving major tags since v8
+        with:
+          version: "0.12"  # same uv as backend/Dockerfile and fake_sites/Dockerfile
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install backend dependencies
+        run: uv sync --locked --directory backend
+      - name: Start the stack
+        run: docker compose up --build -d --wait --wait-timeout 300
+      - name: Demo scenario
+        run: uv run --locked --directory backend python ../scripts/demo_scenario.py
+      - name: Compose logs
+        if: failure()
+        run: |
+          docker compose ps -a
+          docker compose logs --no-color
+      - name: Stop the stack
+        if: always()
+        run: docker compose down -v

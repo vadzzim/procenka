@@ -375,7 +375,11 @@ def main() -> int:
         except (ScenarioError, httpx.HTTPError) as exc:
             print(f"Сброс после сценария ... FAIL\n    {exc}", flush=True)
             return 1
-    print("Сценарий пройден; демо сброшено, оба источника в normal.", flush=True)
+    print(
+        f"Сценарий пройден: {len(STEPS)}/{len(STEPS)} шагов OK; "
+        "демо сброшено, оба источника в normal.",
+        flush=True,
+    )
     return 0
 
 
