@@ -65,7 +65,11 @@ curl -X PUT http://127.0.0.1:8001/control/modes/html_catalog -H 'content-type: a
 curl -X PUT http://127.0.0.1:8001/control/modes/json_api -H 'content-type: application/json' -d '{"mode":"blocked","retry_after":5}'
 curl -X POST http://127.0.0.1:8001/control/reset    # оба источника в normal
 docker compose exec api python -m app.db.reset      # вернуть демо в состояние seed
+docker compose restart worker                       # прогон, оставшийся в running, станет failed/interrupted
+SCHEDULE_INTERVAL_SECONDS=60 docker compose up -d worker   # показать расписание (в compose по умолчанию выключено)
 ```
+
+Воркер (`python -m app.worker`): при старте переводит прогоны в running в failed/`interrupted`, затем в цикле — проверка расписания, claim, execute, пауза `WORKER_POLL_SECONDS` (2). Расписание `SCHEDULE_INTERVAL_SECONDS` (в приложении 600, в compose 0 — выключено): прогон ставится, если нет активного и последний прогон любого источника создан не позже интервала назад; решение — по БД. SIGTERM/SIGINT останавливают воркер между итерациями. Каждая строка лога воркера содержит `run_id=<id>` (`-` вне прогона).
 
 Режимы: `normal`, `markup_changed`, `unavailable`, `blocked`, `price_spike`; источники `html_catalog`, `json_api`. Режимы живут в памяти fake-sites и сбрасываются при его перезапуске.
 

@@ -53,8 +53,11 @@ class Settings(BaseSettings):
     # Retries after HTTP 429 (each after Retry-After, if it fits into the time budget).
     source_rate_limit_retries: int = Field(default=2, ge=0)
 
-    # How long the worker sleeps when there is no queued run.
-    worker_poll_interval_seconds: float = Field(default=1.0, gt=0)
+    # The worker's pause between iterations (schedule check, claim, execute).
+    worker_poll_seconds: float = Field(default=2.0, gt=0)
+    # A scheduled run is queued when no run is active and the latest run is at
+    # least this old (decided from the database); 0 turns the schedule off.
+    schedule_interval_seconds: float = Field(default=600.0, ge=0)
 
     def retry_policy(self) -> RetryPolicy:
         return RetryPolicy(

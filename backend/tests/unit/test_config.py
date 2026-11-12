@@ -106,3 +106,21 @@ def test_invalid_retry_settings_are_rejected(
     monkeypatch.setenv(name, value)
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_worker_defaults_and_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("WORKER_POLL_SECONDS", "SCHEDULE_INTERVAL_SECONDS"):
+        monkeypatch.delenv(name, raising=False)
+    settings = Settings()
+    assert settings.worker_poll_seconds == 2
+    assert settings.schedule_interval_seconds == 600
+
+    monkeypatch.setenv("SCHEDULE_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_SECONDS", "0.5")
+    settings = Settings()
+    assert settings.schedule_interval_seconds == 0
+    assert settings.worker_poll_seconds == 0.5
+
+    monkeypatch.setenv("SCHEDULE_INTERVAL_SECONDS", "-1")
+    with pytest.raises(ValidationError):
+        Settings()

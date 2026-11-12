@@ -54,7 +54,15 @@ services:
     build: ../backend
     image: procenka-backend
     command: ["python", "-m", "app.worker"]
-    environment: *backend-env
+    environment:
+      <<: *backend-env
+      # Scheduled runs, seconds. Off by default in the demo: on an empty runs table
+      # (start, reset) a scheduled run would publish before the manual step 2 of the
+      # scenario. Shown separately: SCHEDULE_INTERVAL_SECONDS=60 docker compose up -d worker
+      SCHEDULE_INTERVAL_SECONDS: ${SCHEDULE_INTERVAL_SECONDS:-0}
+      WORKER_POLL_SECONDS: ${WORKER_POLL_SECONDS:-2}
+    # A crashed worker comes back; its run left running is recovered as interrupted.
+    restart: unless-stopped
     depends_on:
       api:
         condition: service_healthy

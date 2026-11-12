@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import (
 from app.api.main import create_app
 from app.db.seed import seed
 from tests.fakes import MONITOR_APPLICATION_NAME
+from tests.integration.demo import Demo
 
 
 @pytest.fixture
@@ -46,3 +47,14 @@ async def monitor_engine(migrated_database_url: URL) -> AsyncIterator[AsyncEngin
         yield engine
     finally:
         await engine.dispose()
+
+
+@pytest.fixture
+async def demo(
+    seeded: None, session_factory: async_sessionmaker[AsyncSession], api: httpx.AsyncClient
+) -> AsyncIterator[Demo]:
+    demo = Demo(session_factory, api)
+    try:
+        yield demo
+    finally:
+        await demo.control.aclose()

@@ -291,3 +291,81 @@
 - Шаг 7: прокси режимов fake-sites через backend API и селектор в UI; подписи `SOURCE_ERROR_LABELS` на экране; structlog вместо `logging`.
 - Шаг 10: runbook по трём типам ошибок с примерами сообщений этого шага.
 - Если включить blocked на JSON (вне сценария показа), S публикуется по одному HTML (2 090, +5 %, ниже порога). Сценарий включает blocked только на HTML (условие seed 2).
+
+## Шаг 6. Прогоны: восстановление, расписание, карантин и публикация
+
+### Что сделано
+
+- `app/db/runs.py`:
+  - `recover_interrupted_runs` — одним `UPDATE … WHERE status = 'running' RETURNING id` переводит все прогоны в running в failed, `finish_reason = interrupted`, `finished_at = now()`; queued не трогает;
+  - `enqueue_scheduled_run` — одним `INSERT … SELECT … WHERE NOT EXISTS (активный) AND NOT EXISTS (прогон, созданный позже now − интервал) ON CONFLICT DO NOTHING RETURNING id`: решение «пора» принимается по БД, а ручной прогон, появившийся параллельно, ловит `uq_runs_single_active`. Интервал 0 — расписание выключено.
+- `app/worker/loop.py`: `run_worker(…, stop=asyncio.Event)` — восстановление при старте → в цикле `worker_iteration` (расписание → `process_next_run`: claim + execute) → пауза `WORKER_POLL_SECONDS` (прерывается событием `stop`). Исключение в прогоне: лог с трассировкой и run_id, прогон → failed `internal_error`, наружу `RunCrashedError` (исходное исключение в `__cause__`). Если записать отказ не удалось (БД недоступна), цикл повторяет запись в начале следующих итераций, пока она не пройдёт: иначе прогон остался бы running и до перезапуска блокировал все новые. Исключение вне прогона (например, БД недоступна) — лог и следующая итерация. Отмена (`CancelledError`) не перехватывается: прогон остаётся running и восстанавливается при следующем старте.
+- `app/worker/__main__.py`: первый SIGTERM/SIGINT ставит `stop` (выход между итерациями), второй отменяет текущую задачу. Обработчики ставятся через `loop.add_signal_handler`; на Windows это не поддерживается, там работает Ctrl+C.
+- `app/worker/logs.py`: `run_id` хранится в `ContextVar`, фильтр на обработчике добавляет его в каждую запись любого логгера (включая httpx и задачи, запущенные внутри прогона). Формат `… run_id=<id> …`, вне прогона `run_id=-`; строки трассировки и многострочных сообщений начинаются с `run_id=<id> | ` (`RunIdFormatter`). `python -m app.worker.once` использует тот же формат.
+- Настройки: `WORKER_POLL_INTERVAL_SECONDS` (1) заменён на `WORKER_POLL_SECONDS` (2); добавлен `SCHEDULE_INTERVAL_SECONDS` (600, ≥ 0).
+- Compose: у worker `SCHEDULE_INTERVAL_SECONDS` (по умолчанию 0, см. «Решения»), `WORKER_POLL_SECONDS`, `restart: unless-stopped`. `.env.example`: оба источника, `JSON_API_PROXY`, переменные воркера. `AGENTS.md`: команды восстановления и показа расписания.
+- Тесты (интеграционные — на PostgreSQL, настоящие парсеры против fake-sites; общий класс `Demo` вынесен в `tests/integration/demo.py`, фикстура `demo` — в `tests/integration/conftest.py`):
+  - `test_worker.py`:
+    - прогон после claim без execute → старт `run_worker` → failed/`interrupted` с `finished_at`; `published_prices` побайтно те же (`p::text`), у прерванного прогона нет `source_results` и расчётов. До восстановления `POST /api/runs` возвращает этот running-прогон, после — создаёт новый, и воркер завершает его `succeeded`, A = 1 240;
+    - отмена `process_next_run` посреди сбора (источник ждёт вечно) → прогон остаётся running → `recover_interrupted_runs` → failed/`interrupted`, цены те же; повторное восстановление ничего не находит; следующий прогон succeeded;
+    - восстановление не трогает queued и завершённые прогоны;
+    - расписание: пустая БД → прогон `schedule`; при queued и при running — нет; последний (ручной) прогон моложе интервала — нет, старше — да, после него снова ждёт; интервал 0 — никогда; 5 раундов одновременных `POST /api/runs` и проверки расписания → ровно один активный прогон, оба отвечают его id;
+    - воркер сам ставит и выполняет прогоны по расписанию (внедрённые часы: следующий — только после сдвига на интервал); перезапуск воркера сразу после ручного прогона не ставит новый;
+    - исключение в прогоне → failed `internal_error`, цены те же, воркер жив и выполняет следующий прогон; исключение в прогоне при недоступной БД (`fail_run` дважды падает) → цикл дописывает отказ на следующей итерации, затем новый прогон succeeded; исключение вне прогона → воркер продолжает и выполняет прогон по расписанию;
+    - каждая строка логов `app.worker` и источника внутри прогона содержит `run_id` своего прогона, восстановленного — свой, строки вне прогона — `run_id=-`;
+  - `test_publication.py`:
+    - price_spike на JSON: S (скачок, −25,1 %) и Febi (нет опубликованной цены) → карантин, прогон succeeded; строка `published_prices` S не изменилась, у Febi строки нет; каждая изменённая строка — от расчёта `published` этого прогона; в `GET /api/published-prices` у S 1990.00 и `calculation_id = null`, Febi нет, id карантинных расчётов нет; следующий прогон — снова карантин, ничего из них не опубликовано;
+    - «без изменений» не переписывает `published_prices`: второй прогон подряд — A `unchanged`, ни одного `published`, таблица побайтно та же (цена, `calculation_id` первого прогона, `published_at`);
+    - нет пригодных предложений vs технический сбой: оба источника ok → Hengst `retained` / `no_eligible_offers`, `partial_data = false`, прогон succeeded, `source_results` ok; HTML unavailable → источник failed/network, прогон partial, у Hengst `partial_data = true`; оба unavailable → оба failed, прогон failed `all_sources_failed`, расчётов нет; опубликованная цена Hengst 690 не меняется;
+    - предложения прошлых прогонов не попадают в расчёт: во втором прогоне площадки не отдают артикул A → A `retained` / `no_eligible_offers` без предложений, хотя в БД лежат 3 предложения A из прогона 1; цена 1 240 остаётся;
+  - unit: `StopSignals` (первый сигнал — `stop`, второй — отмена), `RunIdFilter` и `RunIdFormatter` (привязка, наследование в задачах, `-` вне прогона, каждая строка трассировки), настройки воркера.
+- Уже было покрыто и не дублировалось: второй и параллельные запросы запуска → тот же прогон (`test_runs_api.py::test_repeated_start_returns_the_same_run`, `::test_concurrent_starts_create_one_run`); SKIP LOCKED — `test_runs_api.py::test_claim_skips_a_locked_run` (параллельная транзакция держит queued-прогон `FOR UPDATE`: `claim_next_run` не ждёт и возвращает None, после её завершения забирает); один источник упал → partial с `partial_data` (`test_run_end_to_end.py::test_one_source_failed_gives_partial_run`, `test_failure_modes.py` markup_changed и blocked); оба упали → цены и выдача API не изменились (`test_run_end_to_end.py::test_all_sources_failed_changes_no_published_price`, `test_failure_modes.py::test_unavailable_on_both_fails_the_run_and_changes_no_price`); результаты записаны, но прогон уже не running → ничего не публикуется (`test_run_end_to_end.py::test_run_that_is_no_longer_running_publishes_nothing`).
+
+### Ручная проверка в compose
+
+`docker compose up --build -d --wait`, `docker compose exec api python -m app.db.reset`, `POST /control/reset`, затем:
+
+```
+$ curl -X PUT http://127.0.0.1:8001/control/modes/json_api -H 'content-type: application/json' -d '{"mode":"blocked","retry_after":20}'
+$ curl -X POST http://127.0.0.1:8000/api/runs     -> {"id":1,"status":"queued","created":true}
+$ curl http://127.0.0.1:8000/api/runs/1           -> "status":"running", "sources":[]
+$ docker compose restart worker
+$ curl http://127.0.0.1:8000/api/runs/1           -> "status":"failed","finish_reason":"interrupted","finished_at":"2026-11-12T03:30:00.961891Z","sources":[]
+```
+
+Лог воркера:
+
+```
+03:29:55 INFO app.worker run_id=1 run started
+03:29:55 INFO httpx run_id=1 HTTP Request: GET http://fake-sites:8001/html/search?article=W71275 "HTTP/1.1 200 OK"
+03:29:57 INFO app.worker run_id=- signal 15: stopping after the current iteration
+03:30:00 WARNING app.worker run_id=1 run was left running by a stopped worker: failed as interrupted
+03:30:00 INFO app.worker run_id=- worker started: schedule every 0.0 s (0 = off), poll every 2.0 s
+```
+
+Прогон ждал `Retry-After 20` JSON-источника. На SIGTERM воркер решил выйти после итерации, но Docker убил его по истечении `StopTimeout` (в этом окружении у всех контейнеров 1 с, exit 137; при обычных 10 с исход тот же — пауза 20 с). То же через `docker compose stop worker` во время прогона 2; затем `POST /control/reset` и `docker compose start worker` → прогон 2 failed/`interrupted`, новый прогон 3 `succeeded` (html ok 26, json ok 24; `run_id=3 run finished: succeeded, 25 calculations, 11 published`), A = 1240.00 с `calculation_id` 1 (у прерванных прогонов расчётов нет), S = 1990.00.
+
+Расписание отдельно: `SCHEDULE_INTERVAL_SECONDS=20 docker compose up -d worker` → `run_id=4 scheduled run queued … run finished: succeeded, 25 calculations, 0 published`, через 20 с то же для `run_id=5` (trigger `schedule`). После проверки — reset, `POST /control/reset`, `docker compose down`.
+
+### Решения
+
+- Восстановление — одна транзакция при старте воркера, до первой итерации. Расчёты и предложения прерванного прогона (если транзакция записи успела) остаются историей; публикация идёт только в транзакции завершения с условием `status = 'running'`, поэтому из прерванного прогона ничего не публикуется. Новый прогон считается с нуля.
+- «Сейчас» для расписания — часы БД (`now()`), те же, что ставят `runs.created_at`. Тест передаёт `now`, и прогон по расписанию создаётся с этим `created_at`, чтобы часы были одни.
+- «Последний прогон» — по `created_at` прогона с любым источником запуска и любым статусом (в том числе failed): иначе после серии сбоев расписание ставило бы прогон на каждой итерации.
+- **В compose расписание по умолчанию выключено** (`SCHEDULE_INTERVAL_SECONDS` = 0), в приложении — 600, как решил прораб. Причина: при пустой таблице `runs` (первый `up` и каждый reset) правило «прогонов нет → пора» ставит прогон через ~2 с. Он публикует A = 1 240, и ручной шаг 2 сценария показывает «без изменений» вместо публикации — нарушается условие seed 1. План требует показывать расписание отдельно: `SCHEDULE_INTERVAL_SECONDS=60 docker compose up -d worker`. В `.env.example` переменная закомментирована, потому что compose читает `.env`. Прорабу: если расписание должно быть включено в поставляемой конфигурации, нужно другое правило для пустой БД (например, отсчёт от старта воркера), а это меняет решение «пустая БД → прогон».
+- Пауза `WORKER_POLL_SECONDS` — после каждой итерации, в том числе после выполненного прогона: одновременно активен только один прогон, следующего в очереди всё равно нет.
+- SIGTERM не прерывает текущий прогон: выход после итерации. Если Docker убивает процесс раньше (grace period), прогон восстанавливается при следующем старте. `stop_grace_period` не увеличен: иначе `docker compose restart worker` ждал бы окончания прогона.
+- `restart: unless-stopped` у worker: упавший процесс поднимается сам и восстанавливает свой прогон.
+- «Без изменений» и карантин `published_prices` не трогают — публикуются только расчёты `published` (решение шага 4, теперь закреплено тестами).
+- `process_next_run` поднимает `RunCrashedError` вместо исходного исключения, чтобы цикл не печатал трассировку второй раз без run_id.
+- Решение для шага 7: reset через API отвечает 409, если есть queued или running прогон. Здесь не реализуется; `python -m app.db.reset` остаётся без проверки.
+
+### Отступления от plan.md
+
+- Расписание в поставляемом compose выключено (см. «Решения»); механизм есть и включается одной переменной.
+
+### Долги
+
+- Долг шага 4 «прогон в running после падения воркера блокирует новые» закрыт.
+- Шаг 7: structlog вместо `logging` (контекст `run_id` уже в `ContextVar`), `/health`, reset в API с 409 при активном прогоне.
+- Шаг 10: в runbook — `finish_reason` `interrupted` / `internal_error` / `all_sources_failed` и как их отличать по логу (`run_id=`).

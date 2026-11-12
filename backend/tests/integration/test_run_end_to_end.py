@@ -39,7 +39,7 @@ from app.parsers.json_api import JsonApiSource
 from app.pricing.models import ResultReason, ResultState
 from app.pricing.normalize import normalize_article, normalize_brand
 from app.worker.execute import RunNotRunningError, execute_run
-from app.worker.loop import process_next_run
+from app.worker.loop import RunCrashedError, process_next_run
 from tests.fakes import (
     OPEN_TRANSACTIONS_SQL,
     FailingSource,
@@ -449,8 +449,9 @@ async def test_unexpected_error_fails_the_run_as_internal_error(
             raise ZeroDivisionError
 
     enqueued = await enqueue_run(session_factory, RunTrigger.MANUAL)
-    with pytest.raises(ZeroDivisionError):
+    with pytest.raises(RunCrashedError) as raised:
         await process_next_run(session_factory, [BrokenSource()], SETTINGS)
+    assert isinstance(raised.value.__cause__, ZeroDivisionError)
 
     async with session_factory() as session:
         run = await session.get(Run, enqueued.id)
