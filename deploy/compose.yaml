@@ -70,5 +70,22 @@ services:
       fake-sites:
         condition: service_healthy
 
+  nginx:
+    # Frontend static build + reverse proxy: /api/ and /health go to api:8000.
+    build:
+      context: ..
+      dockerfile: deploy/nginx/Dockerfile
+    ports:
+      - "127.0.0.1:${NGINX_HOST_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 3s
+    depends_on:
+      api:
+        condition: service_healthy
+
 volumes:
   postgres-data:

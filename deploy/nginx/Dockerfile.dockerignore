@@ -1,0 +1,6 @@
+# Allow-list: only the frontend sources and the nginx config reach the builder.
+*
+!frontend/
+!deploy/nginx/default.conf
+frontend/node_modules
+frontend/dist

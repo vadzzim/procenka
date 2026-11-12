@@ -30,8 +30,16 @@ uv run --directory fake_sites ruff check
 uv run --directory fake_sites ruff format --check
 uv run --directory fake_sites mypy
 uv run --directory fake_sites pytest
+npm --prefix frontend ci
+npm --prefix frontend run typecheck
+npm --prefix frontend run lint
+npm --prefix frontend test
+npm --prefix frontend run build
+npm --prefix frontend run gen:api:check
 docker compose config --quiet
 ```
+
+- Фронтенд (`frontend/`): Vite + React + TypeScript (strict) + TanStack Query, npm с `package-lock.json`. Типы API — `frontend/src/api/schema.d.ts`, сгенерированный `openapi-typescript` из `backend/openapi.json` и закоммиченный; после регенерации `openapi.json` выполни `npm --prefix frontend run gen:api`, иначе `gen:api:check` падает. Тесты — Vitest + Testing Library (jsdom), фикстуры типизированы сгенерированными типами. Локальная разработка: `npm --prefix frontend run dev` (Vite проксирует `/api` и `/health` на `http://127.0.0.1:8000`, переопределяется `API_PROXY_TARGET`).
 
 - `fake_sites` подключён к backend как dev-зависимость по пути (editable): тесты backend ходят в настоящее приложение fake-sites через `httpx.ASGITransport`, без сети и без запущенного контейнера.
 
@@ -57,7 +65,8 @@ uv run --directory backend python -m app.db.reset    # очистить всё �
 Запуск всего демо и ручной прогон:
 
 ```sh
-docker compose up --build -d                       # postgres, fake-sites, api (миграции и seed при старте), worker
+docker compose up --build -d                       # postgres, fake-sites, api (миграции и seed при старте), worker, nginx
+# экран: http://127.0.0.1:8080 (nginx: статика фронтенда, /api/ и /health проксируются на api:8000)
 curl http://127.0.0.1:8000/health                   # 200 {"status":"ok"} или 503, если БД не отвечает
 curl -X POST http://127.0.0.1:8000/api/runs         # поставить прогон; повторный запрос вернёт тот же id
 curl http://127.0.0.1:8000/api/runs/<id>            # статус прогона и источников
