@@ -1,0 +1,1673 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Проценка",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health",
+        "description": "Живо ли приложение: база данных отвечает на ``SELECT 1``.",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "База данных не отвечает",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs": {
+      "post": {
+        "summary": "Create Run",
+        "description": "Поставить ручной прогон в очередь; если прогон уже есть — вернуть существующий.",
+        "operationId": "create_run_api_runs_post",
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunCreated"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Прогон уже идёт или ждёт запуска",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunCreated"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{run_id}": {
+      "get": {
+        "summary": "Get Run",
+        "description": "Статус прогона и результаты источников.",
+        "operationId": "get_run_api_runs__run_id__get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/published-prices": {
+      "get": {
+        "summary": "Published Prices",
+        "description": "Только опубликованные цены; рекомендации из карантина сюда не попадают.",
+        "operationId": "published_prices_api_published_prices_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedPricesOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/status": {
+      "get": {
+        "summary": "Get Status",
+        "description": "Последний и активный прогон; источники последнего завершённого прогона.",
+        "operationId": "get_status_api_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/products": {
+      "get": {
+        "summary": "Get Products",
+        "description": "Таблица товаров: закупка, опубликованная цена и последний расчёт.\n\nПоследний расчёт берётся только из прогонов succeeded и partial.",
+        "operationId": "get_products_api_products_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductsOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/calculations/{calculation_id}": {
+      "get": {
+        "summary": "Get Calculation",
+        "description": "«Почему цена такая»: вход, предложения, границы, ограничения, решение и формула.",
+        "operationId": "get_calculation_api_calculations__calculation_id__get",
+        "parameters": [
+          {
+            "name": "calculation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Calculation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalculationOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/demo/modes": {
+      "get": {
+        "summary": "Get Modes",
+        "description": "Текущий режим каждого источника.",
+        "operationId": "get_modes_api_demo_modes_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoModesOut"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "fake-sites недоступен или ответил ошибкой",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/demo/modes/{source}": {
+      "put": {
+        "summary": "Put Mode",
+        "description": "Переключить режим источника; действует со следующего запроса парсера.",
+        "operationId": "put_mode_api_demo_modes__source__put",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Source"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModeChange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceModeOut"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "fake-sites недоступен или ответил ошибкой",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/demo/reset": {
+      "post": {
+        "summary": "Reset Demo",
+        "description": "Вернуть демо в исходное состояние: оба источника — normal, БД — как после seed.\n\nПорядок: проверка активного прогона → сброс режимов fake-sites → в одной\nтранзакции под блокировкой ``runs`` повторная проверка и сброс БД. Режимы\nсбрасываются первыми, поэтому прогон, поставленный во время сброса, либо\nстирается сбросом БД, либо (если он ещё в очереди или выполняется) даёт 409,\nно никогда не выполняется со старыми режимами после ответа 200.",
+        "operationId": "reset_demo_api_demo_reset_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoResetOut"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Есть прогон в очереди или в работе",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "fake-sites недоступен или ответил ошибкой",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CalculationInputsOut": {
+        "properties": {
+          "purchase_price": {
+            "type": "string",
+            "pattern": "^-?\\d+\\.\\d{2}$",
+            "title": "Purchase Price",
+            "examples": [
+              "1240.00"
+            ]
+          },
+          "min_markup_percent": {
+            "type": "string",
+            "pattern": "^-?\\d+(\\.\\d+)?$",
+            "title": "Min Markup Percent",
+            "examples": [
+              "-25.1"
+            ]
+          },
+          "step": {
+            "type": "string",
+            "pattern": "^-?\\d+\\.\\d{2}$",
+            "title": "Step",
+            "examples": [
+              "1240.00"
+            ]
+          },
+          "ceiling": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?\\d+\\.\\d{2}$",
+                "examples": [
+                  "1240.00"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ceiling"
+          },
+          "quarantine_threshold_percent": {
+            "type": "string",
+            "pattern": "^-?\\d+(\\.\\d+)?$",
+            "title": "Quarantine Threshold Percent",
+            "examples": [
+              "-25.1"
+            ]
+          },
+          "suspicious_price_factor": {
+            "type": "string",
+            "pattern": "^-?\\d+(\\.\\d+)?$",
+            "title": "Suspicious Price Factor",
+            "examples": [
+              "-25.1"
+            ]
+          },
+          "max_delivery_days": {
+            "type": "integer",
+            "title": "Max Delivery Days"
+          }
+        },
+        "type": "object",
+        "required": [
+          "purchase_price",
+          "min_markup_percent",
+          "step",
+          "ceiling",
+          "quarantine_threshold_percent",
+          "suspicious_price_factor",
+          "max_delivery_days"
+        ],
+        "title": "CalculationInputsOut",
+        "description": "Purchase and settings as they were at the time of the calculation."
+      },
+      "CalculationOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "run_status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "product": {
+            "$ref": "#/components/schemas/ProductOut"
+          },
+          "calculated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Calculated At"
+          },
+          "rules_version": {
+            "type": "string",
+            "title": "Rules Version"
+          },
+          "partial_data": {
+            "type": "boolean",
+            "title": "Partial Data"
+          },
+          "inputs": {
+            "$ref": "#/components/schemas/CalculationInputsOut"
+          },
+          "accepted_offers": {
+            "items": {
+              "$ref": "#/components/schemas/OfferOut"
+            },
+            "type": "array",
+            "title": "Accepted Offers"
+          },
+          "rejected_offers": {
+            "items": {
+              "$ref": "#/components/schemas/RejectedOfferOut"
+            },
+            "type": "array",
+            "title": "Rejected Offers"
+          },
+          "min_competitor_price": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?\\d+\\.\\d{2}$",
+                "examples": [
+                  "1240.00"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Competitor Price"
+          },
+          "lower_bound": {
+            "type": "string",
+            "pattern": "^-?\\d+\\.\\d{2}$",
+            "title": "Lower Bound",
+            "examples": [
+              "1240.00"
+            ]
+          },
+          "upper_bound": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?\\d+\\.\\d{2}$",
+                "examples": [
+                  "1240.00"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upper Bound"
+          },
+          "target_price_raw": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?\\d+\\.\\d{2}$",
+                "examples": [
+                  "1240.00"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Price Raw"
+          },
+          "target_price": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?\\d+\\.\\d{2}$",
+                "examples": [
+                  "1240.00"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Price"
+          },
+          "applied_constraints": {
+            "items": {
+              "$ref": "#/components/schemas/ConstraintOut"
+            },
+            "type": "array",
+            "title": "Applied Constraints"
+          },
+          "recommended_price": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?\\d+\\.\\d{2}$",
+                "examples": [
+                  "1240.00"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommended Price"
+          },
+          "previous_price": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?\\d+\\.\\d{2}$",
+                "examples": [
+                  "1240.00"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Price"
+          },
+          "change_percent": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?\\d+(\\.\\d+)?$",
+                "examples": [
+                  "-25.1"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Percent"
+          },
+          "change_percent_display": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?\\d+(\\.\\d+)?$",
+                "examples": [
+                  "-25.1"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Percent Display"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ResultState"
+          },
+          "state_label": {
+            "type": "string",
+            "title": "State Label"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResultReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Label"
+          },
+          "formula": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Formula"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "run_id",
+          "run_status",
+          "product",
+          "calculated_at",
+          "rules_version",
+          "partial_data",
+          "inputs",
+          "accepted_offers",
+          "rejected_offers",
+          "min_competitor_price",
+          "lower_bound",
+          "upper_bound",
+          "target_price_raw",
+          "target_price",
+          "applied_constraints",
+          "recommended_price",
+          "previous_price",
+          "change_percent",
+          "change_percent_display",
+          "state",
+          "state_label",
+          "reason",
+          "reason_label",
+          "formula"
+        ],
+        "title": "CalculationOut",
+        "description": "Everything behind one price: «Почему цена такая»."
+      },
+      "Constraint": {
+        "type": "string",
+        "enum": [
+          "lower_bound",
+          "ceiling"
+        ],
+        "title": "Constraint"
+      },
+      "ConstraintOut": {
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/Constraint"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "label"
+        ],
+        "title": "ConstraintOut"
+      },
+      "DemoMode": {
+        "type": "string",
+        "enum": [
+          "normal",
+          "markup_changed",
+          "unavailable",
+          "blocked",
+          "price_spike"
+        ],
+        "title": "DemoMode",
+        "description": "Failure modes of the synthetic sources (the same codes as fake-sites)."
+      },
+      "DemoModesOut": {
+        "properties": {
+          "modes": {
+            "items": {
+              "$ref": "#/components/schemas/SourceModeOut"
+            },
+            "type": "array",
+            "title": "Modes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "modes"
+        ],
+        "title": "DemoModesOut"
+      },
+      "DemoResetOut": {
+        "properties": {
+          "products": {
+            "type": "integer",
+            "title": "Products"
+          },
+          "published_prices": {
+            "type": "integer",
+            "title": "Published Prices"
+          },
+          "modes": {
+            "items": {
+              "$ref": "#/components/schemas/SourceModeOut"
+            },
+            "type": "array",
+            "title": "Modes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "products",
+          "published_prices",
+          "modes"
+        ],
+        "title": "DemoResetOut",
+        "description": "What the reset did: the database is back to the seed, both sources are normal."
+      },
+      "ErrorOut": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "ErrorOut"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthOut": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "unavailable"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "HealthOut"
+      },
+      "LatestCalculationOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "calculated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Calculated At"
+          },
+          "recommended_price": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?\\d+\\.\\d{2}$",
+                "examples": [
+                  "1240.00"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommended Price"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ResultState"
+          },
+          "state_label": {
+            "type": "string",
+            "title": "State Label"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResultReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Label"
+          },
+          "change_percent_display": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?\\d+(\\.\\d+)?$",
+                "examples": [
+                  "-25.1"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Percent Display"
+          },
+          "partial_data": {
+            "type": "boolean",
+            "title": "Partial Data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "run_id",
+          "calculated_at",
+          "recommended_price",
+          "state",
+          "state_label",
+          "reason",
+          "reason_label",
+          "change_percent_display",
+          "partial_data"
+        ],
+        "title": "LatestCalculationOut",
+        "description": "The calculation of the product in the newest succeeded or partial run."
+      },
+      "ModeChange": {
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/DemoMode"
+          },
+          "retry_after": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 3600.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry After"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode"
+        ],
+        "title": "ModeChange"
+      },
+      "OfferOut": {
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/Source"
+          },
+          "source_label": {
+            "type": "string",
+            "title": "Source Label"
+          },
+          "brand_raw": {
+            "type": "string",
+            "title": "Brand Raw"
+          },
+          "article_raw": {
+            "type": "string",
+            "title": "Article Raw"
+          },
+          "brand": {
+            "type": "string",
+            "title": "Brand"
+          },
+          "article": {
+            "type": "string",
+            "title": "Article"
+          },
+          "price": {
+            "type": "string",
+            "pattern": "^-?\\d+\\.\\d{2}$",
+            "title": "Price",
+            "examples": [
+              "1240.00"
+            ]
+          },
+          "stock": {
+            "type": "integer",
+            "title": "Stock"
+          },
+          "delivery_days": {
+            "type": "integer",
+            "title": "Delivery Days"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "source_label",
+          "brand_raw",
+          "article_raw",
+          "brand",
+          "article",
+          "price",
+          "stock",
+          "delivery_days"
+        ],
+        "title": "OfferOut"
+      },
+      "OfferRejection": {
+        "type": "string",
+        "enum": [
+          "other_article",
+          "other_brand",
+          "non_positive_price",
+          "out_of_stock",
+          "delivery_too_long",
+          "suspiciously_low_price"
+        ],
+        "title": "OfferRejection",
+        "description": "Why an offer was not used. Checked in this order; the first match wins."
+      },
+      "PriceOrigin": {
+        "type": "string",
+        "enum": [
+          "calculation",
+          "seed"
+        ],
+        "title": "PriceOrigin"
+      },
+      "ProductOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "brand": {
+            "type": "string",
+            "title": "Brand"
+          },
+          "article": {
+            "type": "string",
+            "title": "Article"
+          },
+          "brand_raw": {
+            "type": "string",
+            "title": "Brand Raw"
+          },
+          "article_raw": {
+            "type": "string",
+            "title": "Article Raw"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "brand",
+          "article",
+          "brand_raw",
+          "article_raw",
+          "name"
+        ],
+        "title": "ProductOut"
+      },
+      "ProductRowOut": {
+        "properties": {
+          "product": {
+            "$ref": "#/components/schemas/ProductOut"
+          },
+          "purchase_price": {
+            "type": "string",
+            "pattern": "^-?\\d+\\.\\d{2}$",
+            "title": "Purchase Price",
+            "examples": [
+              "1240.00"
+            ]
+          },
+          "published": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublishedPriceInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "latest_calculation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LatestCalculationOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "product",
+          "purchase_price",
+          "published",
+          "latest_calculation"
+        ],
+        "title": "ProductRowOut"
+      },
+      "ProductsOut": {
+        "properties": {
+          "products": {
+            "items": {
+              "$ref": "#/components/schemas/ProductRowOut"
+            },
+            "type": "array",
+            "title": "Products"
+          }
+        },
+        "type": "object",
+        "required": [
+          "products"
+        ],
+        "title": "ProductsOut"
+      },
+      "PublishedPriceInfo": {
+        "properties": {
+          "price": {
+            "type": "string",
+            "pattern": "^-?\\d+\\.\\d{2}$",
+            "title": "Price",
+            "examples": [
+              "1240.00"
+            ]
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Published At"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/PriceOrigin"
+          },
+          "origin_label": {
+            "type": "string",
+            "title": "Origin Label"
+          },
+          "calculation_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calculation Id"
+          },
+          "calculation_run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calculation Run Id"
+          },
+          "calculated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calculated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "price",
+          "published_at",
+          "origin",
+          "origin_label",
+          "calculation_id",
+          "calculation_run_id",
+          "calculated_at"
+        ],
+        "title": "PublishedPriceInfo",
+        "description": "The current published price and where it came from."
+      },
+      "PublishedPriceOut": {
+        "properties": {
+          "product_id": {
+            "type": "integer",
+            "title": "Product Id"
+          },
+          "brand": {
+            "type": "string",
+            "title": "Brand"
+          },
+          "article": {
+            "type": "string",
+            "title": "Article"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "price": {
+            "type": "string",
+            "pattern": "^-?\\d+\\.\\d{2}$",
+            "title": "Price",
+            "examples": [
+              "1240.00"
+            ]
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Published At"
+          },
+          "calculation_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calculation Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "product_id",
+          "brand",
+          "article",
+          "name",
+          "price",
+          "published_at",
+          "calculation_id"
+        ],
+        "title": "PublishedPriceOut"
+      },
+      "PublishedPricesOut": {
+        "properties": {
+          "prices": {
+            "items": {
+              "$ref": "#/components/schemas/PublishedPriceOut"
+            },
+            "type": "array",
+            "title": "Prices"
+          }
+        },
+        "type": "object",
+        "required": [
+          "prices"
+        ],
+        "title": "PublishedPricesOut"
+      },
+      "RejectedOfferOut": {
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/Source"
+          },
+          "source_label": {
+            "type": "string",
+            "title": "Source Label"
+          },
+          "brand_raw": {
+            "type": "string",
+            "title": "Brand Raw"
+          },
+          "article_raw": {
+            "type": "string",
+            "title": "Article Raw"
+          },
+          "brand": {
+            "type": "string",
+            "title": "Brand"
+          },
+          "article": {
+            "type": "string",
+            "title": "Article"
+          },
+          "price": {
+            "type": "string",
+            "pattern": "^-?\\d+\\.\\d{2}$",
+            "title": "Price",
+            "examples": [
+              "1240.00"
+            ]
+          },
+          "stock": {
+            "type": "integer",
+            "title": "Stock"
+          },
+          "delivery_days": {
+            "type": "integer",
+            "title": "Delivery Days"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/OfferRejection"
+          },
+          "reason_label": {
+            "type": "string",
+            "title": "Reason Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "source_label",
+          "brand_raw",
+          "article_raw",
+          "brand",
+          "article",
+          "price",
+          "stock",
+          "delivery_days",
+          "reason",
+          "reason_label"
+        ],
+        "title": "RejectedOfferOut"
+      },
+      "ResultReason": {
+        "type": "string",
+        "enum": [
+          "no_previous_price",
+          "price_spike",
+          "no_eligible_offers",
+          "invalid_purchase_price",
+          "rules_conflict"
+        ],
+        "title": "ResultReason"
+      },
+      "ResultState": {
+        "type": "string",
+        "enum": [
+          "published",
+          "unchanged",
+          "quarantine",
+          "retained"
+        ],
+        "title": "ResultState"
+      },
+      "RunCreated": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "created": {
+            "type": "boolean",
+            "title": "Created"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "created"
+        ],
+        "title": "RunCreated"
+      },
+      "RunFinishReason": {
+        "type": "string",
+        "enum": [
+          "interrupted",
+          "all_sources_failed",
+          "internal_error"
+        ],
+        "title": "RunFinishReason",
+        "description": "Why a run ended the way it did; empty for a normal finish."
+      },
+      "RunOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "status_label": {
+            "type": "string",
+            "title": "Status Label"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/RunTrigger"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "finish_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunFinishReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finish_reason_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finish Reason Label"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/SourceResultOut"
+            },
+            "type": "array",
+            "title": "Sources"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "status_label",
+          "trigger",
+          "created_at",
+          "started_at",
+          "finished_at",
+          "finish_reason",
+          "finish_reason_label",
+          "sources"
+        ],
+        "title": "RunOut"
+      },
+      "RunStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "partial",
+          "failed"
+        ],
+        "title": "RunStatus"
+      },
+      "RunTrigger": {
+        "type": "string",
+        "enum": [
+          "manual",
+          "schedule"
+        ],
+        "title": "RunTrigger"
+      },
+      "Source": {
+        "type": "string",
+        "enum": [
+          "html_catalog",
+          "json_api"
+        ],
+        "title": "Source"
+      },
+      "SourceErrorKind": {
+        "type": "string",
+        "enum": [
+          "network",
+          "structure",
+          "blocked"
+        ],
+        "title": "SourceErrorKind"
+      },
+      "SourceModeOut": {
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/Source"
+          },
+          "source_label": {
+            "type": "string",
+            "title": "Source Label"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/DemoMode"
+          },
+          "mode_label": {
+            "type": "string",
+            "title": "Mode Label"
+          },
+          "retry_after": {
+            "type": "integer",
+            "title": "Retry After"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "source_label",
+          "mode",
+          "mode_label",
+          "retry_after"
+        ],
+        "title": "SourceModeOut"
+      },
+      "SourceResultOut": {
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/Source"
+          },
+          "source_label": {
+            "type": "string",
+            "title": "Source Label"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SourceStatus"
+          },
+          "error_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceErrorKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Label"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "offer_count": {
+            "type": "integer",
+            "title": "Offer Count"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Finished At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "source_label",
+          "status",
+          "error_kind",
+          "error_label",
+          "error_message",
+          "offer_count",
+          "started_at",
+          "finished_at"
+        ],
+        "title": "SourceResultOut",
+        "description": "How one source went in a run. ``ok`` with zero offers is a successful\ncollection that found nothing; ``failed`` is a technical failure with a kind."
+      },
+      "SourceStatus": {
+        "type": "string",
+        "enum": [
+          "ok",
+          "failed"
+        ],
+        "title": "SourceStatus"
+      },
+      "StatusOut": {
+        "properties": {
+          "latest_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "active_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_finished_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "latest_run",
+          "active_run",
+          "last_finished_run"
+        ],
+        "title": "StatusOut",
+        "description": "The header of the screen."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

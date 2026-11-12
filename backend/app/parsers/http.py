@@ -31,8 +31,11 @@ from typing import Protocol
 import httpx
 
 from app.db.enums import SourceErrorKind
+from app.logs import get_logger
 from app.parsers.base import SourceError
 from app.parsers.fields import structure_error
+
+logger = get_logger("app.parsers")
 
 
 class Clock(Protocol):
@@ -191,6 +194,13 @@ class SourceHttp:
                     f"пауза {_seconds(pause)} не помещается в остаток бюджета "
                     f"{_seconds(remaining)} из {_seconds(self._budget.seconds)}"
                 )
+            logger.warning(
+                "network failure, retrying",
+                failure=failure,
+                path=path,
+                attempt=network_failures,
+                pause_seconds=pause,
+            )
             await self._clock.sleep(pause)
 
     async def _wait_after_rate_limit(
@@ -211,6 +221,12 @@ class SourceHttp:
                 f"слишком много запросов: HTTP 429 на {where}, {shown} не помещается "
                 f"в остаток бюджета {_seconds(remaining)} из {_seconds(self._budget.seconds)}"
             )
+        logger.warning(
+            "rate limited (HTTP 429), retrying after a pause",
+            pause_seconds=pause,
+            retry_after=header,
+            retry=retries_done + 1,
+        )
         await self._clock.sleep(pause)
 
     def _budget_spent(

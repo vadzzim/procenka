@@ -1,5 +1,6 @@
 """The demo setup shared by integration tests: the API, one fake-sites instance
-and the worker's real sources (``build_sources``) talking to it over ASGI.
+(the same one the API's demo panel talks to) and the worker's real sources
+(``build_sources``) talking to it over ASGI.
 
 Modes are switched over the fake-sites control API between runs, as in the
 demo. The clock is fake, so retry pauses do not slow the tests down.
@@ -9,7 +10,6 @@ from decimal import Decimal
 from typing import Any
 
 import httpx
-from fake_sites.app import create_app as create_fake_sites_app
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -30,12 +30,14 @@ class Demo:
     """The API, one fake-sites instance and the worker's real sources."""
 
     def __init__(
-        self, session_factory: async_sessionmaker[AsyncSession], api: httpx.AsyncClient
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        api: httpx.AsyncClient,
+        transport: httpx.ASGITransport,
     ) -> None:
         self.session_factory = session_factory
         self.api = api
         self.clock = FakeClock()
-        transport = httpx.ASGITransport(app=create_fake_sites_app())
         self.control = httpx.AsyncClient(transport=transport, base_url=BASE_URL)
         settings = SETTINGS.model_copy(update={"fake_sites_url": BASE_URL})
         self.sources = build_sources(settings, transport=transport, clock=self.clock)

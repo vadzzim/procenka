@@ -11,8 +11,8 @@ from app.config import get_settings
 from app.db.enums import RunStatus, RunTrigger
 from app.db.runs import enqueue_run
 from app.db.session import create_engine, create_session_factory
+from app.logs import WORKER_LOG_KEYS, configure_logging
 from app.parsers.registry import build_sources
-from app.worker.logs import configure_logging
 from app.worker.loop import process_next_run
 
 
@@ -39,5 +39,5 @@ async def _main() -> int:
 
 
 if __name__ == "__main__":
-    configure_logging()
+    configure_logging("worker", always=WORKER_LOG_KEYS)
     sys.exit(asyncio.run(_main()))

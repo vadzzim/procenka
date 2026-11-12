@@ -7,16 +7,15 @@ recovers it as interrupted). The same happens when the process is killed.
 
 import asyncio
 import contextlib
-import logging
 import signal
 
 from app.config import get_settings
 from app.db.session import create_engine, create_session_factory
+from app.logs import WORKER_LOG_KEYS, configure_logging, get_logger
 from app.parsers.registry import build_sources
-from app.worker.logs import configure_logging
 from app.worker.loop import run_worker
 
-logger = logging.getLogger("app.worker")
+logger = get_logger("app.worker")
 
 
 class StopSignals:
@@ -28,10 +27,10 @@ class StopSignals:
 
     def __call__(self, signum: int) -> None:
         if not self._stop.is_set():
-            logger.info("signal %s: stopping after the current iteration", signum)
+            logger.info("signal received: stopping after the current iteration", signal=signum)
             self._stop.set()
         else:
-            logger.warning("signal %s again: cancelling the current run", signum)
+            logger.warning("signal received again: cancelling the current run", signal=signum)
             self._task.cancel()
 
 
@@ -62,5 +61,5 @@ async def _main() -> None:
 
 
 if __name__ == "__main__":
-    configure_logging()
+    configure_logging("worker", always=WORKER_LOG_KEYS)
     asyncio.run(_main())

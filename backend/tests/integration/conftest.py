@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator
 
 import httpx
 import pytest
+from fake_sites.app import create_app as create_fake_sites_app
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -28,12 +29,20 @@ async def seeded(session_factory: async_sessionmaker[AsyncSession]) -> None:
 
 
 @pytest.fixture
+def fake_sites_transport() -> httpx.ASGITransport:
+    """One fake-sites instance per test: the API's demo panel and the sources share it."""
+    return httpx.ASGITransport(app=create_fake_sites_app())
+
+
+@pytest.fixture
 async def api(
-    session_factory: async_sessionmaker[AsyncSession],
+    session_factory: async_sessionmaker[AsyncSession], fake_sites_transport: httpx.ASGITransport
 ) -> AsyncIterator[httpx.AsyncClient]:
-    transport = httpx.ASGITransport(app=create_app(session_factory))
+    application = create_app(session_factory, fake_sites_transport=fake_sites_transport)
+    transport = httpx.ASGITransport(app=application)
     async with httpx.AsyncClient(transport=transport, base_url="http://api.test") as client:
         yield client
+    await application.state.fake_sites.aclose()
 
 
 @pytest.fixture
@@ -51,9 +60,12 @@ async def monitor_engine(migrated_database_url: URL) -> AsyncIterator[AsyncEngin
 
 @pytest.fixture
 async def demo(
-    seeded: None, session_factory: async_sessionmaker[AsyncSession], api: httpx.AsyncClient
+    seeded: None,
+    session_factory: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+    fake_sites_transport: httpx.ASGITransport,
 ) -> AsyncIterator[Demo]:
-    demo = Demo(session_factory, api)
+    demo = Demo(session_factory, api, fake_sites_transport)
     try:
         yield demo
     finally:

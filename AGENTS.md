@@ -39,6 +39,7 @@ docker compose config --quiet
 - Интеграционные тесты берут URL из `TEST_DATABASE_URL`, по умолчанию `postgresql+asyncpg://procenka:procenka@localhost:54329/procenka_test`, и сами создают базу `procenka_test`, если её нет. Порт postgres на хосте — `POSTGRES_HOST_PORT` (по умолчанию 54329); пример переменных — `.env.example`.
 - `.env` из корня читает только `docker compose`, pytest его не загружает. Если порт или учётные данные postgres изменены в `.env`, экспортируй `TEST_DATABASE_URL` в оболочке или запускай `uv run --directory backend --env-file ../.env pytest` (путь `--env-file` считается от `backend/`).
 - Быстрый прогон без БД: `uv run --directory backend pytest -m "not integration"`. Готовность шага по нему не проверяется.
+- OpenAPI-схема API зафиксирована в `backend/openapi.json` (из неё генерируются типы TS). После изменения API перегенерируй её: `uv run --directory backend python -m app.api.openapi` (`--check` — только сравнить). Тест `tests/unit/api/test_openapi.py` падает, если файл устарел или в схеме появилось поле `type: number`.
 - Согласованность моделей и миграций (`alembic check`), а также `upgrade head` → `downgrade base` → `upgrade head` проверяет интеграционный тест `tests/integration/test_migrations.py` в отдельной базе `procenka_test_migrations`; отдельной команды проверки нет.
 
 ## База демо
@@ -57,9 +58,16 @@ uv run --directory backend python -m app.db.reset    # очистить всё �
 
 ```sh
 docker compose up --build -d                       # postgres, fake-sites, api (миграции и seed при старте), worker
+curl http://127.0.0.1:8000/health                   # 200 {"status":"ok"} или 503, если БД не отвечает
 curl -X POST http://127.0.0.1:8000/api/runs         # поставить прогон; повторный запрос вернёт тот же id
 curl http://127.0.0.1:8000/api/runs/<id>            # статус прогона и источников
+curl http://127.0.0.1:8000/api/status               # последний, активный и последний завершённый прогон с источниками
+curl http://127.0.0.1:8000/api/products             # таблица экрана: закупка, опубликованная цена, последний расчёт
+curl http://127.0.0.1:8000/api/calculations/<id>    # «Почему цена такая»: предложения, границы, формула
 curl http://127.0.0.1:8000/api/published-prices     # опубликованные цены
+curl http://127.0.0.1:8000/api/demo/modes           # режимы источников через API (прокси к fake-sites)
+curl -X PUT http://127.0.0.1:8000/api/demo/modes/html_catalog -H 'content-type: application/json' -d '{"mode":"markup_changed"}'
+curl -X POST http://127.0.0.1:8000/api/demo/reset   # БД в состояние seed и оба источника в normal; 409, если есть активный прогон
 curl http://127.0.0.1:8001/control/modes            # режимы источников fake-sites
 curl -X PUT http://127.0.0.1:8001/control/modes/html_catalog -H 'content-type: application/json' -d '{"mode":"markup_changed"}'
 curl -X PUT http://127.0.0.1:8001/control/modes/json_api -H 'content-type: application/json' -d '{"mode":"blocked","retry_after":5}'
@@ -69,11 +77,13 @@ docker compose restart worker                       # прогон, оставш
 SCHEDULE_INTERVAL_SECONDS=60 docker compose up -d worker   # показать расписание (в compose по умолчанию выключено)
 ```
 
-Воркер (`python -m app.worker`): при старте переводит прогоны в running в failed/`interrupted`, затем в цикле — проверка расписания, claim, execute, пауза `WORKER_POLL_SECONDS` (2). Расписание `SCHEDULE_INTERVAL_SECONDS` (в приложении 600, в compose 0 — выключено): прогон ставится, если нет активного и последний прогон любого источника создан не позже интервала назад; решение — по БД. SIGTERM/SIGINT останавливают воркер между итерациями. Каждая строка лога воркера содержит `run_id=<id>` (`-` вне прогона).
+Воркер (`python -m app.worker`): при старте переводит прогоны в running в failed/`interrupted`, затем в цикле — проверка расписания, claim, execute, пауза `WORKER_POLL_SECONDS` (2). Расписание `SCHEDULE_INTERVAL_SECONDS` (в приложении 600, в compose 0 — выключено): прогон ставится, если нет активного и последний прогон любого источника создан не позже интервала назад; решение — по БД. SIGTERM/SIGINT останавливают воркер между итерациями.
+
+Логи api и worker — structlog, одна JSON-строка на запись в stdout (`timestamp`, `level`, `logger`, `event`, `service` и контекст). Каждая строка воркера содержит `run_id` (`null` вне прогона); строки сбора источника — ещё `source`, строки расчёта товара — `product_id`. Трассировка исключения — поле `exception` той же строки. Например: `docker compose logs worker | grep '"run_id": 3'`.
 
 Режимы: `normal`, `markup_changed`, `unavailable`, `blocked`, `price_spike`; источники `html_catalog`, `json_api`. Режимы живут в памяти fake-sites и сбрасываются при его перезапуске.
 
-Без контейнеров api и worker: `uv run --directory backend uvicorn app.api.main:app`, `uv run --directory fake_sites uvicorn fake_sites.app:app --port 8001` и `uv run --directory backend python -m app.worker.once` (поставить и выполнить один прогон без воркера). Новая миграция: `uv run --directory backend alembic revision --autogenerate -m "..."`, затем проверить и поправить файл (типы enum в `downgrade` удаляются вручную).
+Без контейнеров api и worker: `uv run --directory backend python -m app.api` (или `uvicorn app.api.main:app`), `uv run --directory fake_sites uvicorn fake_sites.app:app --port 8001` и `uv run --directory backend python -m app.worker.once` (поставить и выполнить один прогон без воркера). Новая миграция: `uv run --directory backend alembic revision --autogenerate -m "..."`, затем проверить и поправить файл (типы enum в `downgrade` удаляются вручную).
 
 ## Соглашения
 

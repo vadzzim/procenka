@@ -16,7 +16,6 @@ loop between iterations (set by SIGTERM / SIGINT in ``__main__``).
 
 import asyncio
 import contextlib
-import logging
 from collections.abc import Callable
 from datetime import datetime
 
@@ -25,11 +24,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.config import Settings
 from app.db.enums import RunFinishReason
 from app.db.runs import claim_next_run, enqueue_scheduled_run, recover_interrupted_runs
+from app.logs import bind_run_id, get_logger
 from app.parsers.base import OfferSource
 from app.worker.execute import RunOutcome, execute_run, fail_run
-from app.worker.logs import bind_run_id
 
-logger = logging.getLogger("app.worker")
+logger = get_logger("app.worker")
 
 # A clock for the schedule; ``None`` means the database clock (see enqueue_scheduled_run).
 type Now = Callable[[], datetime] | None
@@ -80,10 +79,10 @@ async def process_next_run(
                 raise RunCrashedError(run_id, recorded=False) from exc
             raise RunCrashedError(run_id, recorded=True) from exc
         logger.info(
-            "run finished: %s, %s calculations, %s published",
-            outcome.status.value,
-            outcome.calculations,
-            outcome.published,
+            "run finished",
+            status=outcome.status.value,
+            calculations=outcome.calculations,
+            published=outcome.published,
         )
     return outcome
 
@@ -138,9 +137,9 @@ async def run_worker(
 ) -> None:
     await recover(session_factory)
     logger.info(
-        "worker started: schedule every %s s (0 = off), poll every %s s",
-        settings.schedule_interval_seconds,
-        settings.worker_poll_seconds,
+        "worker started",
+        schedule_interval_seconds=settings.schedule_interval_seconds,
+        poll_seconds=settings.worker_poll_seconds,
     )
     # A crashed run still ``running`` because its failure could not be written:
     # it would block every new run until a restart, so it is retried first.

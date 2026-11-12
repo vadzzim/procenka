@@ -18,15 +18,15 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.enums import RunFinishReason, RunStatus, RunTrigger, Source
-from app.db.models import Calculation, Run, SourceResult
+from app.db.models import Calculation, Product, Run, SourceResult
 from app.db.runs import claim_next_run, enqueue_run, enqueue_scheduled_run, recover_interrupted_runs
 from app.db.seed_data import PRODUCT_A
 from app.parsers.base import OfferSource, ParsedOffer
 from app.worker import loop
 from app.worker.execute import fail_run
-from app.worker.logs import RunIdFilter, RunIdFormatter
 from app.worker.loop import process_next_run, run_worker
 from tests.integration.demo import SETTINGS, Demo
+from tests.logs import capture_json_logs
 
 pytestmark = pytest.mark.integration
 
@@ -441,27 +441,10 @@ async def test_worker_survives_an_error_outside_a_run(
 # --- Logs ------------------------------------------------------------------
 
 
-class _Records(logging.Handler):
-    def __init__(self) -> None:
-        super().__init__(level=logging.DEBUG)
-        self.addFilter(RunIdFilter())
-        self.setFormatter(RunIdFormatter())
-        self.lines: list[tuple[str, object, str]] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.lines.append((record.name, record.run_id, self.format(record)))  # type: ignore[attr-defined]
-
-
-async def test_every_worker_log_line_carries_the_run_id(
+async def test_every_worker_log_line_is_json_with_its_run_source_and_product(
     demo: Demo, start_worker: Callable[..., Worker]
 ) -> None:
-    handler = _Records()
-    worker_logger = logging.getLogger("app.worker")
     source_logger = logging.getLogger("tests.source")
-    previous = worker_logger.level
-    worker_logger.setLevel(logging.INFO)
-    worker_logger.addHandler(handler)
-    source_logger.addHandler(handler)
 
     class _LoggingSource:
         """A source that logs from inside the run, as httpx does."""
@@ -474,7 +457,7 @@ async def test_every_worker_log_line_carries_the_run_id(
             source_logger.warning("collecting %s articles", len(articles))
             return await self._inner.fetch_offers(articles)
 
-    try:
+    with capture_json_logs() as logs:
         stale = (await demo.api.post("/api/runs")).json()["id"]
         await claim_next_run(demo.session_factory)
         worker = start_worker([_LoggingSource(demo.sources[0]), demo.sources[1]])
@@ -482,17 +465,36 @@ async def test_every_worker_log_line_carries_the_run_id(
         fresh = (await demo.api.post("/api/runs")).json()["id"]
         await _wait_finished(demo.session_factory, fresh)
         await worker.shutdown()
-    finally:
-        worker_logger.removeHandler(handler)
-        source_logger.removeHandler(handler)
-        worker_logger.setLevel(previous)
 
-    lines = [(name, run_id, line) for name, run_id, line in handler.lines]
-    assert all(f" run_id={run_id} " in line for _, run_id, line in lines)
-    # The recovered run, the new run and a log line from inside a source.
-    assert any(r == stale and "interrupted" in line for _, r, line in lines)
-    assert any(r == fresh and "run started" in line for _, r, line in lines)
-    assert any(r == fresh and "run finished: succeeded" in line for _, r, line in lines)
-    assert ("tests.source", fresh) in {(name, r) for name, r, _ in lines}
+    records = logs.records  # every line is one JSON object
+    assert records
+    assert all("run_id" in r for r in records)
+    # The recovered run, the new run and its outcome.
+    assert any(r["run_id"] == stale and "interrupted" in r["event"] for r in records)
+    assert any(r["run_id"] == fresh and r["event"] == "run started" for r in records)
+    finished = [r for r in records if r["event"] == "run finished"]
+    assert [(r["run_id"], r["status"]) for r in finished] == [(fresh, "succeeded")]
+    # Lines from inside a source (our own, the parsers' and httpx's) carry run and source.
+    # (httpx lines of the test's own API client are not part of a run.)
+    from_source = [
+        r
+        for r in records
+        if r["logger"] in {"tests.source", "httpx", "app.parsers"} and "api.test" not in r["event"]
+    ]
+    assert {r["logger"] for r in from_source} == {"tests.source", "httpx", "app.parsers"}
+    assert all(
+        r["run_id"] == fresh and r["source"] in {"html_catalog", "json_api"} for r in from_source
+    )
+    assert {r["source"] for r in from_source if r["logger"] == "httpx"} == {
+        "html_catalog",
+        "json_api",
+    }
+    assert any(r["logger"] == "tests.source" and r["source"] == "html_catalog" for r in records)
+    # One line per calculated product with the run and the product.
+    calculated = [r for r in records if r["event"] == "price calculated"]
+    async with demo.session_factory() as session:
+        product_ids = set(await session.scalars(select(Product.id)))
+    assert {r["product_id"] for r in calculated} == product_ids
+    assert all(r["run_id"] == fresh and "source" not in r for r in calculated)
     # Lines that do not belong to a run say so explicitly.
-    assert any(r == "-" and "worker started" in line for _, r, line in lines)
+    assert any(r["run_id"] is None and r["event"] == "worker started" for r in records)

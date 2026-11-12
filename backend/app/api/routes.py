@@ -1,31 +1,22 @@
-"""HTTP endpoints of the demo core."""
+"""HTTP endpoints of runs and published prices."""
 
-from typing import Annotated
-
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, HTTPException, Response, status
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.api.deps import SessionFactory
+from app.api.runs import load_run_out
 from app.api.schemas import (
+    ErrorOut,
     PublishedPriceOut,
     PublishedPricesOut,
     RunCreated,
     RunOut,
-    SourceResultOut,
 )
 from app.db.enums import RunTrigger
-from app.db.models import Product, PublishedPrice, Run, SourceResult
+from app.db.models import Product, PublishedPrice, Run
 from app.db.runs import enqueue_run
 
 router = APIRouter(prefix="/api")
-
-
-def get_session_factory(request: Request) -> async_sessionmaker[AsyncSession]:
-    factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
-    return factory
-
-
-SessionFactory = Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory)]
 
 
 @router.post(
@@ -41,37 +32,14 @@ async def create_run(session_factory: SessionFactory, response: Response) -> Run
     return RunCreated(id=enqueued.id, status=enqueued.status, created=enqueued.created)
 
 
-@router.get("/runs/{run_id}")
+@router.get("/runs/{run_id}", responses={404: {"model": ErrorOut}})
 async def get_run(run_id: int, session_factory: SessionFactory) -> RunOut:
     """Статус прогона и результаты источников."""
     async with session_factory() as session:
-        run = await session.get(Run, run_id)
-        if run is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Прогон не найден")
-        results = await session.scalars(
-            select(SourceResult).where(SourceResult.run_id == run_id).order_by(SourceResult.source)
-        )
-        return RunOut(
-            id=run.id,
-            status=run.status,
-            trigger=run.trigger,
-            created_at=run.created_at,
-            started_at=run.started_at,
-            finished_at=run.finished_at,
-            finish_reason=run.finish_reason,
-            sources=[
-                SourceResultOut(
-                    source=r.source,
-                    status=r.status,
-                    error_kind=r.error_kind,
-                    error_message=r.error_message,
-                    offer_count=r.offer_count,
-                    started_at=r.started_at,
-                    finished_at=r.finished_at,
-                )
-                for r in results
-            ],
-        )
+        run = await load_run_out(session, await session.get(Run, run_id))
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Прогон не найден")
+    return run
 
 
 @router.get("/published-prices")

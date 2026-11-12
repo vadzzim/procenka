@@ -18,6 +18,9 @@ from decimal import Decimal
 from typing import Protocol
 
 from app.db.enums import Source, SourceErrorKind
+from app.logs import bind_source, get_logger
+
+logger = get_logger("app.parsers")
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,13 +67,22 @@ class OfferSource(Protocol):
 
 
 async def collect(source: OfferSource, articles: Sequence[str]) -> SourceCollection:
-    """Collect one source and turn a ``SourceError`` into a failed collection."""
-    started_at = datetime.now(UTC)
-    try:
-        offers = tuple(await source.fetch_offers(articles))
-    except SourceError as error:
-        return SourceCollection(source.source, started_at, datetime.now(UTC), (), error)
-    return SourceCollection(source.source, started_at, datetime.now(UTC), offers, None)
+    """Collect one source and turn a ``SourceError`` into a failed collection.
+
+    Every line logged meanwhile (retries, httpx requests) carries ``source``.
+    """
+    with bind_source(source.source.value):
+        started_at = datetime.now(UTC)
+        logger.info("source collection started", articles=len(articles))
+        try:
+            offers = tuple(await source.fetch_offers(articles))
+        except SourceError as error:
+            logger.warning(
+                "source failed", error_kind=error.kind.value, error_message=error.message
+            )
+            return SourceCollection(source.source, started_at, datetime.now(UTC), (), error)
+        logger.info("source collected", offers=len(offers))
+        return SourceCollection(source.source, started_at, datetime.now(UTC), offers, None)
 
 
 async def collect_all(

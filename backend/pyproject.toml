@@ -12,6 +12,7 @@ dependencies = [
     "uvicorn>=0.54.0",
     "httpx>=0.28.1",
     "selectolax>=1.0.2",
+    "structlog>=26.1.0",
 ]
 
 [dependency-groups]
@@ -35,6 +36,8 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "ASYNC", "PT"]
+# Russian UI text and typography (× −) are intended, not confusable look-alikes.
+ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.mypy]
 python_version = "3.13"

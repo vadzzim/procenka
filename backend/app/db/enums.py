@@ -60,3 +60,29 @@ SOURCE_ERROR_LABELS: MappingProxyType[SourceErrorKind, str] = MappingProxyType(
         SourceErrorKind.BLOCKED: "заблокирован",
     }
 )
+
+
+RUN_STATUS_LABELS: MappingProxyType[RunStatus, str] = MappingProxyType(
+    {
+        RunStatus.QUEUED: "в очереди",
+        RunStatus.RUNNING: "выполняется",
+        RunStatus.SUCCEEDED: "успешно",
+        RunStatus.PARTIAL: "частично: часть источников с ошибкой",
+        RunStatus.FAILED: "ошибка",
+    }
+)
+
+RUN_FINISH_REASON_LABELS: MappingProxyType[RunFinishReason, str] = MappingProxyType(
+    {
+        RunFinishReason.INTERRUPTED: "прерван: воркер остановился во время прогона",
+        RunFinishReason.ALL_SOURCES_FAILED: "все источники завершились ошибкой",
+        RunFinishReason.INTERNAL_ERROR: "внутренняя ошибка воркера",
+    }
+)
+
+SOURCE_LABELS: MappingProxyType[Source, str] = MappingProxyType(
+    {
+        Source.HTML_CATALOG: "HTML-каталог",
+        Source.JSON_API: "JSON API",
+    }
+)

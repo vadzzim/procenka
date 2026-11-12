@@ -369,3 +369,89 @@ $ curl http://127.0.0.1:8000/api/runs/1           -> "status":"failed","finish_r
 - Долг шага 4 «прогон в running после падения воркера блокирует новые» закрыт.
 - Шаг 7: structlog вместо `logging` (контекст `run_id` уже в `ContextVar`), `/health`, reset в API с 409 при активном прогоне.
 - Шаг 10: в runbook — `finish_reason` `interrupted` / `internal_error` / `all_sources_failed` и как их отличать по логу (`run_id=`).
+
+## Шаг 7. API для экрана, structlog, `/health`
+
+### Что сделано
+
+- Эндпоинты (все ответы — Pydantic-модели с явными именами, они станут типами TS):
+  - `GET /api/status` (`StatusOut`) — `latest_run` (новейший прогон любого статуса), `active_run` (queued/running), `last_finished_run` (новейший завершённый); каждый — `RunOut` с подписями статуса и причины завершения и с источниками: статус ok/failed, тип ошибки (код + подпись), сообщение, число предложений. «ok, 0 предложений» и «failed» различимы по `status`.
+  - `GET /api/products` (`ProductsOut`) — товар (id, нормализованные и исходные бренд/артикул, название), закупка, `published` (цена, дата публикации, `origin` calculation/seed с подписью «по расчёту» / «цена из исходных данных», id, прогон и время расчёта, по которому она опубликована), `latest_calculation` (id, прогон, время, рекомендация, состояние и причина с подписями, `change_percent_display`, `partial_data`). Последний расчёт — `DISTINCT ON (product_id)` по расчётам прогонов в succeeded/partial; расчёты running/failed/interrupted прогонов не показываются.
+  - `GET /api/calculations/{id}` (`CalculationOut`) — «Почему цена такая»: снимок входа, учтённые и отброшенные предложения (источник, исходные и нормализованные бренд/артикул, цена, остаток, срок; у отброшенных — причина с подписью), минимальная цена конкурента, нижняя граница, потолок, целевая до/после округления, ограничения (код + подпись), итог, опубликованная цена на момент расчёта, изменение (точное и для показа), состояние, причина, версия правил, `partial_data`, статус прогона и `formula` — строки на русском с подставленными числами.
+  - `GET /api/demo/modes`, `PUT /api/demo/modes/{source}` — прокси к `/control/...` fake-sites (httpx-клиент приложения, `FAKE_SITES_URL`, таймаут 5 с). Ошибка связи, не-200 или не-JSON → 502 с сообщением («fake-sites недоступен: ConnectError»). Источник и режим проверяются у нас (`Source`, `DemoMode`) → 422.
+  - `POST /api/demo/reset` — проверка queued/running (есть → 409 «Прогон N в очереди или выполняется…», ничего не тронуто) → `POST /control/reset` fake-sites (недоступен → 502 «Ничего не сброшено: …») → в одной транзакции `LOCK TABLE runs IN EXCLUSIVE MODE`, повторная проверка и `reset` (TRUNCATE + seed). Прогон, поставленный в промежутке, даёт 409 «Прогон N поставлен во время сброса: режимы источников сброшены, база — нет…». Ответ `DemoResetOut`: число товаров, опубликованных цен и режимы источников.
+  - `GET /health` — 200 `{"status":"ok"}`, если БД отвечает на `SELECT 1` за 3 с; иначе 503 `{"status":"unavailable"}`. Healthcheck api в compose переведён на `/health`.
+- Деньги в ответах — тип `Money`: `Decimal`, сериализуется строкой ровно с двумя знаками (`"1240.00"`), в схеме `type: string` с паттерном `^-?\d+\.\d{2}$`; значение с большим числом знаков не округляется, а даёт ошибку (это баг, а не формат). Проценты и коэффициент — `DecimalString` (`"-25.1"`, `"20.00"`, `"0.5000"`). Время — ISO 8601 с `Z`.
+- Подписи: к `SOURCE_ERROR_LABELS` и `LABELS` добавлены `RUN_STATUS_LABELS`, `RUN_FINISH_REASON_LABELS`, `SOURCE_LABELS` (`app/db/enums.py`), `DEMO_MODE_LABELS`, `PRICE_ORIGIN_LABELS` (`app/api/schemas.py`). Ответ `GET /api/runs/{id}` дополнен полями `*_label`, коды не изменились.
+- Формула — чистый модуль `app/pricing/explain.py`: `FormulaInput` (снимок расчёта из БД) → `formula_lines`. Числа — пробел-разделитель тысяч, запятая, `−` (U+2212), пробел перед `%`; деньги для показа не округляются (точные промежуточные значения — со всеми знаками: «= 1 124,98875 → 1 124,99 (округление вверх до копейки)»). Строки: частичные данные, нижняя граница, потолок, конфликт правил, порог подозрительно низкой цены, минимальная цена конкурента или «пригодных предложений нет», целевая, итог с ограничениями, решение («Изменение = |1 240,00 − 1 260,00| / 1 260,00 × 100 = 1,6 % ≤ 20 % → опубликована», «… = 25,1 % > 20 % → карантин», «без изменений», «нет предыдущей цены», «Новая цена не публикуется (причина): остаётся опубликованная 690,00»). Если округлённое до 0,1 изменение совпадает с порогом, а точное — нет, показывается больше знаков (`20,04 % > 20 %`).
+- OpenAPI зафиксирована в `backend/openapi.json` (`json.dumps(indent=2, ensure_ascii=False)`, порядок ключей FastAPI, LF). Регенерация: `uv run --directory backend python -m app.api.openapi`, проверка — `--check`. Команда записана в `AGENTS.md`.
+- structlog (`app/logs.py`, заменил `app/worker/logs.py`): structlog-логгеры и записи stdlib (httpx, uvicorn) проходят один `ProcessorFormatter` и выводятся одной JSON-строкой в stdout: `timestamp` (UTC ISO), `level`, `logger`, `event`, `service` (api/worker) и контекст из `structlog.contextvars`. Привязки: `run_id` — на прогон (`process_next_run`, расписание, восстановление), `source` — в `collect` (все строки сбора источника, включая повторы и запросы httpx), `product_id` — на расчёт товара в `execute`. У воркера `run_id` есть в каждой строке (`null` вне прогона). Трассировка — поле `exception` той же строки. Новые строки: начало и итог сбора источника, ошибка источника (тип и сообщение), повтор после сетевой ошибки и после 429, расчёт товара (состояние, причина, рекомендация, число предложений).
+- api запускается `python -m app.api` (uvicorn с `log_config=None` после `configure_logging("api")`), поэтому стартовые строки uvicorn и access log — тоже JSON. Access-строки `/health` отфильтрованы (compose опрашивает его каждые 2 с). При запуске `uvicorn app.api.main:app` логирование настраивается в lifespan.
+- Тесты:
+  - `tests/integration/test_screen_api.py`: seed до прогонов (A 1260.00 из seed, без расчёта); после normal: A опубликована 1240.00 (−1.6, origin calculation, id и время расчёта), S без изменений 1990.00, Febi карантин без опубликованной цены, Hengst E340HD247 оставлена предыдущая / «нет пригодных предложений», цена 690.00 «цена из исходных данных»; оставленная цена A после прогона без предложений — дата и прогон расчёта, по которому она опубликована; расчёты running-прогона и затем interrupted не видны; расчёты failed-прогона не видны; `/api/calculations` для A — вход, учтённые, отброшенные «другой бренд» и «подозрительно низкая цена», границы, формула с «1 250,00 − 10,00 = 1 240,00» и нижней границей 1 200,00; S в price_spike — 1500 → 1 490,00, −25.1, «25,1 % > 20 % → карантин»; потолок (Mahle OC90 → 600, «ограничено сверху»); retained; partial; 404; `/api/status` без прогонов, после markup_changed на HTML (partial, structure, «изменилась структура»), ok с 0 предложений vs failed/blocked, активный + завершённый, interrupted с подписью; подписи в `/api/runs/{id}`.
+  - `tests/integration/test_demo_api.py`: GET/PUT режимов против fake-sites (тот же экземпляр, что у парсеров: следующий прогон видит режимы), 422 на неверный источник/режим/retry_after, 502 при недоступном fake-sites и при HTTP 500; reset — побайтно цены seed, нет прогонов/предложений/расчётов, режимы normal, следующий прогон снова id 1 и A = 1240; 409 при queued и при running (ничего не сброшено, режимы прежние); 502 при недоступном fake-sites (БД не тронута); прогон со старыми режимами, выполненный во время сброса режимов, стёрт (200, состояние seed); прогон, поставленный во время сброса режимов, — 409, БД прежняя, режимы normal; `/health` 200 и 503 (БД на закрытом порту).
+  - `tests/unit/pricing/test_explain.py` — форматирование чисел и все ветки формулы на ядре расчёта (контрольные 1 240 и 1 200, карантин, потолок, округление границы и целевой, конфликт, некорректная закупка, нет предложений, частичные данные, изменение у порога).
+  - `tests/unit/api/test_openapi.py` — файл совпадает с `app.openapi()`; в схеме нет ни одного `type: number`; полный список денежных полей — строки с денежным паттерном, других полей с этим паттерном нет; `money_string` не округляет.
+  - Логи: unit — JSON-строки с `run_id`/`source`/`product_id` из structlog и stdlib, наследование в задаче, трассировка — поле одной строки, `configure_logging` переводит uvicorn в JSON и пропускает `/health`; интеграционный (`test_worker.py`) — весь лог двух прогонов воркера (восстановленного и нового) разбирается как JSON, в каждой строке `run_id`, строки источника (свои, парсеров, httpx) — с `run_id` и `source` обоих источников, строка «price calculated» — на каждый товар с `product_id`.
+- Фикстура `fake_sites_transport`: один экземпляр fake-sites на тест для API (панель режимов) и для парсеров `Demo`.
+- ruff: правила RUF001–RUF003 (похожие символы) отключены — русский текст UI и типографика формулы (`×`, `−`) — норма проекта.
+
+### Ручная проверка в compose
+
+`docker compose up --build -d --wait`, затем:
+
+```
+$ curl -X POST :8000/api/demo/reset      -> {"products":25,"published_prices":24,"modes":[… "normal" …]}
+$ curl -i :8000/health                    -> 200 {"status":"ok"}
+$ curl :8000/api/status                   -> {"latest_run":null,"active_run":null,"last_finished_run":null}
+$ curl -X POST :8000/api/runs             -> {"id":1,"status":"queued","created":true}
+$ curl :8000/api/status                   -> run 1 succeeded, html ok 26, json ok 24
+$ curl :8000/api/products                 -> A 1240.00 published (-1.6, по расчёту 1), S unchanged 1990.00 (seed),
+                                             Febi quarantine/no_previous_price,
+                                             Hengst retained/no_eligible_offers 690.00 «цена из исходных данных»
+$ curl :8000/api/calculations/1           -> formula: «Нижняя граница = 1 000,00 × (1 + 20 %) = 1 200,00 (округление вверх до копейки)», …,
+                                             «Целевая = 1 250,00 − 10,00 = 1 240,00», «Итог 1 240,00: ограничений нет»,
+                                             «Изменение = |1 240,00 − 1 260,00| / 1 260,00 × 100 = 1,6 % ≤ 20 % → опубликована»
+$ curl -X PUT :8000/api/demo/modes/html_catalog -d '{"mode":"markup_changed"}'
+                                          -> {"mode":"markup_changed","mode_label":"изменилась разметка",…}
+$ curl -X POST :8000/api/runs; curl :8000/api/status
+                                          -> run 2 partial; html failed structure «изменилась структура»; json ok 24
+$ curl -X PUT :8000/api/demo/modes/json_api -d '{"mode":"blocked","retry_after":20}'; curl -X POST :8000/api/runs
+$ curl -i -X POST :8000/api/demo/reset    -> 409 {"detail":"Прогон 3 в очереди или выполняется: сброс после его завершения"}
+  run 3 -> failed / all_sources_failed: structure + blocked
+$ curl -X POST :8000/api/demo/reset       -> 200, оба режима normal; /api/status снова пустой
+$ docker compose stop postgres; curl -i :8000/health -> 503 {"status":"unavailable"}; start postgres -> 200
+```
+
+Лог воркера (`docker compose logs worker`, сокращено):
+
+```
+{"event": "run started", "run_id": 3, "level": "info", "logger": "app.worker", "timestamp": "2026-11-12T03:53:28.609283Z", "service": "worker"}
+{"articles": 25, "event": "source collection started", "source": "json_api", "run_id": 3, "level": "info", "logger": "app.parsers", …}
+{"pause_seconds": 20.0, "retry_after": 20.0, "retry": 1, "event": "rate limited (HTTP 429), retrying after a pause", "source": "json_api", "run_id": 3, "level": "warning", …}
+{"error_kind": "structure", "error_message": "на странице поиска нет блока результатов (#offers) (артикул 0242236562)", "event": "source failed", "source": "html_catalog", "run_id": 3, …}
+{"error_kind": "blocked", "error_message": "слишком много запросов: HTTP 429 на /json/ (страница сессии), Retry-After 20 сек. не помещается в остаток бюджета 10.0 сек. из 30 сек.", "event": "source failed", "source": "json_api", "run_id": 3, …}
+{"status": "failed", "calculations": 0, "published": 0, "event": "run finished", "run_id": 3, "level": "info", "logger": "app.worker", …}
+{"state": "published", "reason": null, "recommended_price": "1240.00", "accepted_offers": 2, "rejected_offers": 2, "partial_data": false, "event": "price calculated", "product_id": 1, "run_id": 1, …}
+```
+
+Строки api — тоже JSON, включая uvicorn (`"logger": "uvicorn.access"`) и httpx-запрос к fake-sites при reset. После проверки — reset и `docker compose down`.
+
+### Решения
+
+- `latest_run`, `active_run` и `last_finished_run` отдаются все три: экрану нужно и «что идёт сейчас», и «чем кончился последний прогон». Источники — у каждого прогона свои; у queued/running и у прогона, прерванного до записи, список пуст.
+- «Последний расчёт» товара — из новейшего прогона succeeded/partial (по `run_id`). Прогон failed расчётов не пишет; interrupted и internal_error могли успеть записать, но не опубликовали — показывать их как текущую рекомендацию было бы неправдой. Сами расчёты доступны по id (`run_status` в ответе).
+- Для оставленной цены экран берёт причину из `latest_calculation`, а дату — из `published.calculated_at` (расчёт, по которому цена опубликована) или `origin = seed`.
+- Подписи отдаёт сервер рядом с кодом (`state` + `state_label` и т. п.), чтобы у фронтенда не было своей таблицы подписей. Коды — enum в схеме, станут union-типами TS.
+- Reset: сначала режимы, потом БД (замечание ревью: при обратном порядке прогон, поставленный между коммитом сброса БД и сбросом режимов, выполнялся со старыми режимами и оставался в БД после ответа 200). Транзакция во время HTTP не открыта, поэтому общей блокировки на всю операцию нет; вместо неё порядок: прогон, выполненный во время сброса режимов, стирается последующим TRUNCATE, а поставленный и не завершённый — даёт 409 на повторной проверке под `LOCK TABLE runs IN EXCLUSIVE MODE` (между этой проверкой и очисткой нельзя ни поставить, ни забрать прогон). Итог 200 означает: режимы normal и БД в состоянии seed на момент коммита. Оба случая покрыты тестами с подменённым транспортом fake-sites. CLI `python -m app.db.reset` остаётся без проверки (решение шага 6).
+- `DemoMode` объявлен в backend (fake-sites — только dev-зависимость); тест сверяет его с `fake_sites.modes.Mode`.
+- В каждой строке лога есть `service`, чтобы строки api и worker различались и при общем сборе. Вывод alembic и `seed` при старте api остаётся текстовым (одноразовый вывод до запуска сервиса).
+
+### Отступления от plan.md
+
+- Нет.
+
+### Долги
+
+- Шаг 8: типы TS генерировать из `backend/openapi.json`; nginx проксирует `/api` и `/health` на api.
+- Шаг 10: в runbook — поиск по JSON-логам (`"run_id": N`, `"source"`, `"event": "source failed"` с `error_kind`).

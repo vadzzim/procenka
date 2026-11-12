@@ -26,10 +26,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.enums import RunFinishReason, RunStatus, SourceStatus
 from app.db.models import Calculation, Offer, Product, PublishedPrice, Run, SourceResult
+from app.logs import bind_product_id, get_logger
 from app.parsers.base import OfferSource, SourceCollection, collect_all
 from app.pricing import models as pricing
 from app.pricing.calculate import calculate_price
 from app.pricing.normalize import normalize_article, normalize_brand
+
+logger = get_logger("app.worker")
 
 
 class RunNotRunningError(RuntimeError):
@@ -268,16 +271,28 @@ async def _calculate(
     for offer in offers:
         by_article[normalize_article(offer.article)].append(offer)
 
-    results = {
-        item.id: calculate_price(
-            item.product,
-            item.settings,
-            by_article.get(item.product.normalized_article, ()),
-            global_settings=global_settings,
-            partial_data=partial_data,
-        )
-        for item in products
-    }
+    results: dict[int, pricing.PricingResult] = {}
+    for item in products:
+        with bind_product_id(item.id):
+            result = calculate_price(
+                item.product,
+                item.settings,
+                by_article.get(item.product.normalized_article, ()),
+                global_settings=global_settings,
+                partial_data=partial_data,
+            )
+            logger.info(
+                "price calculated",
+                state=result.state.value,
+                reason=None if result.reason is None else result.reason.value,
+                recommended_price=None
+                if result.recommended_price is None
+                else str(result.recommended_price),
+                accepted_offers=len(result.accepted_offers),
+                rejected_offers=len(result.rejected_offers),
+                partial_data=partial_data,
+            )
+        results[item.id] = result
     if not results:
         return 0, []
     inserted = await session.execute(
