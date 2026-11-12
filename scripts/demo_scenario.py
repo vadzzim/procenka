@@ -1,4 +1,5 @@
-"""Acceptance script: the 7 steps of the 5-minute demo scenario through the API.
+"""Acceptance script: the 7 steps of the 5-minute demo scenario through the API,
+plus step 8, the confirmation of a quarantined recommendation (extension 1).
 
 Run from the repository root with the whole stack up (``docker compose up --build -d --wait``)::
 
@@ -8,7 +9,7 @@ It talks to the stack only through nginx, like the screen does, and never
 touches the database. Before step 2 it resets the demo (waiting for an active
 run to finish), so it can be run again and again. Each step prints
 ``ШАГ N ... OK`` with its key numbers; the first mismatch prints ``FAIL`` and
-exits with code 1, leaving the demo as it is for a look. After step 7 the demo
+exits with code 1, leaving the demo as it is for a look. After step 8 the demo
 is reset again: database as after seed, both sources normal.
 """
 
@@ -30,6 +31,8 @@ RUNBOOK = "docs/runbook.md"
 # Normalised brand and article of the scenario products (seed: PRODUCT_A, PRODUCT_SPIKE).
 PRODUCT_A = ("Bosch", "0986452041")
 PRODUCT_S = ("MANN-FILTER", "W71275")
+# No published price in the seed: its first recommendation is quarantined too.
+PRODUCT_FEBI = ("Febi", "16410")
 SEED_PRODUCT_COUNT = 25
 
 ACTIVE_STATUSES = {"queued", "running"}
@@ -285,6 +288,59 @@ def step7(_: Demo) -> str:
     return match[0]
 
 
+def confirm(demo: Demo, calculation_id: int, expected: int) -> Json:
+    path = f"/api/calculations/{calculation_id}/confirm"
+    data: Json = demo.request("POST", path, {expected}).json()
+    return data
+
+
+def step8(demo: Demo) -> str:
+    """Extension 1: confirm S; a second confirmation and a superseded one are refused."""
+    s_calc = demo.product(PRODUCT_S)["latest_calculation"]
+    febi_calc = demo.product(PRODUCT_FEBI)["latest_calculation"]
+    check(
+        s_calc["state"] == "quarantine" and s_calc["confirmation"]["can_confirm"],
+        f"S: {s_calc['state']}, можно подтвердить: {s_calc['confirmation']}",
+    )
+    check(febi_calc["state"] == "quarantine", f"Febi: {febi_calc['state']}, ожидался карантин")
+
+    done = confirm(demo, s_calc["id"], 200)
+    check(
+        (done["price"], done["calculation_id"]) == ("1490.00", s_calc["id"]),
+        f"подтверждение S: {done['price']} по расчёту {done['calculation_id']}, "
+        f"ожидалось 1490.00 по {s_calc['id']}",
+    )
+    prices = demo.get("/api/published-prices")["prices"]
+    s_price = next(p for p in prices if (p["brand"], p["article"]) == PRODUCT_S)
+    check(
+        (s_price["price"], s_price["calculation_id"]) == ("1490.00", s_calc["id"]),
+        f"S в выдаче: {s_price['price']} по расчёту {s_price['calculation_id']}, "
+        f"ожидалось 1490.00 по {s_calc['id']}",
+    )
+    row = demo.product(PRODUCT_S)
+    check(
+        row["latest_calculation"]["state"] == "quarantine"
+        and row["latest_calculation"]["confirmation"]["confirmed"],
+        f"S после подтверждения: {row['latest_calculation']}",
+    )
+
+    again = confirm(demo, s_calc["id"], 409)
+    check(again["code"] == "already_confirmed", f"повторное подтверждение: {again}")
+
+    run = demo.run()
+    check(run["status"] in {"succeeded", "partial"}, f"прогон {run['id']}: {run['status']}")
+    old_febi = confirm(demo, febi_calc["id"], 409)
+    check(old_febi["code"] == "superseded", f"подтверждение старого расчёта Febi: {old_febi}")
+    s_after = demo.product(PRODUCT_S)
+    check_published(s_after, "1490.00", "S после нового прогона")
+    return (
+        f"S {done['price']} опубликована по расчёту {done['calculation_id']}; повторно — 409 "
+        f"{again['code']}; после прогона {run['id']} старый расчёт Febi {febi_calc['id']} — "
+        f"409 {old_febi['code']} «{old_febi['detail']}»; S в новом прогоне "
+        f"«{s_after['latest_calculation']['state_label']}»"
+    )
+
+
 STEPS = (
     (1, "запуск: /health, seed, режимы normal", step1),
     (2, "ручной прогон: A = 1 240 ₽, расчёт объяснён", step2),
@@ -293,6 +349,7 @@ STEPS = (
     (5, "JSON price_spike: S в карантине", step5),
     (6, "JSON API: рекомендации из карантина нет", step6),
     (7, "контрольные примеры", step7),
+    (8, "(расширение 1) подтверждение карантина S", step8),
 )
 
 

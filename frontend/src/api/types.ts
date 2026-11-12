@@ -19,6 +19,9 @@ export type DemoMode = Schemas["DemoMode"];
 export type Source = Schemas["Source"];
 export type ResultState = Schemas["ResultState"];
 export type ErrorOut = Schemas["ErrorOut"];
+export type ConfirmationOut = Schemas["ConfirmationOut"];
+export type ConfirmRefusalOut = Schemas["ConfirmRefusalOut"];
+export type PublishedPriceOut = Schemas["PublishedPriceOut"];
 
 // The selector needs the list of modes at runtime; the generated file has only types.
 // `satisfies` plus the exhaustiveness check below make tsc fail when the schema

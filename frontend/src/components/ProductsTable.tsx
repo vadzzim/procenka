@@ -4,6 +4,7 @@ import { useProducts } from "../api/queries";
 import type { ProductRowOut } from "../api/types";
 import { formatDateTime, formatMoney, formatPercent } from "../format";
 import { CalculationDetails } from "./CalculationDetails";
+import { ConfirmQuarantine } from "./ConfirmQuarantine";
 import { ErrorText } from "./ErrorText";
 
 const COLUMNS = 10;
@@ -73,6 +74,14 @@ function ProductRow({
             <button type="button" className="link" aria-expanded={expanded} onClick={onToggle}>
               {expanded ? "Скрыть" : "Почему цена такая"}
             </button>
+          )}
+          {calc?.state === "quarantine" && calc.recommended_price && (
+            <ConfirmQuarantine
+              calculationId={calc.id}
+              recommended={calc.recommended_price}
+              published={row.published?.price ?? null}
+              confirmation={calc.confirmation}
+            />
           )}
         </td>
       </tr>

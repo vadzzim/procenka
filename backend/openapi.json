@@ -220,6 +220,66 @@
         }
       }
     },
+    "/api/calculations/{calculation_id}/confirm": {
+      "post": {
+        "summary": "Confirm",
+        "description": "Подтвердить рекомендацию из карантина и опубликовать её.\n\nМожно только рекомендацию последнего завершённого прогона, не старше\nдопустимого возраста, если закупка, версия правил, настройки товара и\nопубликованная цена не изменились с момента расчёта. Проверка и запись —\nв одной транзакции.",
+        "operationId": "confirm_api_calculations__calculation_id__confirm_post",
+        "parameters": [
+          {
+            "name": "calculation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Calculation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedPriceOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Расчёт не найден",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Подтвердить нельзя: код и причина; ничего не опубликовано",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmRefusalOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/demo/modes": {
       "get": {
         "summary": "Get Modes",
@@ -640,6 +700,9 @@
             },
             "type": "array",
             "title": "Formula"
+          },
+          "confirmation": {
+            "$ref": "#/components/schemas/ConfirmationOut"
           }
         },
         "type": "object",
@@ -668,10 +731,98 @@
           "state_label",
           "reason",
           "reason_label",
-          "formula"
+          "formula",
+          "confirmation"
         ],
         "title": "CalculationOut",
         "description": "Everything behind one price: «Почему цена такая»."
+      },
+      "ConfirmRefusal": {
+        "type": "string",
+        "enum": [
+          "not_quarantine",
+          "already_confirmed",
+          "superseded",
+          "too_old",
+          "purchase_changed",
+          "rules_changed",
+          "settings_changed",
+          "published_changed"
+        ],
+        "title": "ConfirmRefusal"
+      },
+      "ConfirmRefusalOut": {
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ConfirmRefusal"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "detail"
+        ],
+        "title": "ConfirmRefusalOut",
+        "description": "409 of a confirmation: the code and its Russian reason."
+      },
+      "ConfirmationOut": {
+        "properties": {
+          "confirmed": {
+            "type": "boolean",
+            "title": "Confirmed"
+          },
+          "confirmed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed At"
+          },
+          "can_confirm": {
+            "type": "boolean",
+            "title": "Can Confirm"
+          },
+          "refusal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConfirmRefusal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "refusal_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refusal Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "confirmed",
+          "confirmed_at",
+          "can_confirm",
+          "refusal",
+          "refusal_label"
+        ],
+        "title": "ConfirmationOut",
+        "description": "Confirmation of a quarantined recommendation (extension 1 of plan.md).\n\n``can_confirm`` says whether POST /api/calculations/{id}/confirm would publish\nnow; otherwise ``refusal`` is the code it would answer with (409) and\n``refusal_label`` its Russian reason, e.g. for a disabled button."
       },
       "Constraint": {
         "type": "string",
@@ -872,6 +1023,9 @@
           "partial_data": {
             "type": "boolean",
             "title": "Partial Data"
+          },
+          "confirmation": {
+            "$ref": "#/components/schemas/ConfirmationOut"
           }
         },
         "type": "object",
@@ -885,7 +1039,8 @@
           "reason",
           "reason_label",
           "change_percent_display",
-          "partial_data"
+          "partial_data",
+          "confirmation"
         ],
         "title": "LatestCalculationOut",
         "description": "The calculation of the product in the newest succeeded or partial run."
@@ -988,6 +1143,7 @@
         "type": "string",
         "enum": [
           "calculation",
+          "confirmation",
           "seed"
         ],
         "title": "PriceOrigin"

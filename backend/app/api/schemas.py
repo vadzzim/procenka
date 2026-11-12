@@ -14,6 +14,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, PlainSerializer, WithJsonSchema
 
+from app.db.confirm import ConfirmRefusal
 from app.db.enums import (
     RunFinishReason,
     RunStatus,
@@ -125,11 +126,14 @@ class ProductOut(BaseModel):
 
 class PriceOrigin(StrEnum):
     CALCULATION = "calculation"
+    # A quarantined recommendation published by the manager's confirmation.
+    CONFIRMATION = "confirmation"
     SEED = "seed"
 
 
 PRICE_ORIGIN_LABELS = {
     PriceOrigin.CALCULATION: "по расчёту",
+    PriceOrigin.CONFIRMATION: "подтверждена из карантина",
     PriceOrigin.SEED: "цена из исходных данных",
 }
 
@@ -147,6 +151,29 @@ class PublishedPriceInfo(BaseModel):
     calculated_at: datetime | None
 
 
+class ConfirmationOut(BaseModel):
+    """Confirmation of a quarantined recommendation (extension 1 of plan.md).
+
+    ``can_confirm`` says whether POST /api/calculations/{id}/confirm would publish
+    now; otherwise ``refusal`` is the code it would answer with (409) and
+    ``refusal_label`` its Russian reason, e.g. for a disabled button.
+    """
+
+    confirmed: bool
+    # When the recommendation was confirmed and published; the state stays "quarantine".
+    confirmed_at: datetime | None
+    can_confirm: bool
+    refusal: ConfirmRefusal | None
+    refusal_label: str | None
+
+
+class ConfirmRefusalOut(BaseModel):
+    """409 of a confirmation: the code and its Russian reason."""
+
+    code: ConfirmRefusal
+    detail: str
+
+
 class LatestCalculationOut(BaseModel):
     """The calculation of the product in the newest succeeded or partial run."""
 
@@ -162,6 +189,7 @@ class LatestCalculationOut(BaseModel):
     # Signed change against the published price, rounded to 0.1 for display.
     change_percent_display: DecimalString | None
     partial_data: bool
+    confirmation: ConfirmationOut
 
 
 class ProductRowOut(BaseModel):
@@ -244,6 +272,7 @@ class CalculationOut(BaseModel):
     reason_label: str | None
     # The calculation step by step in Russian with the numbers filled in.
     formula: list[str]
+    confirmation: ConfirmationOut
 
 
 # --- Published prices -------------------------------------------------------

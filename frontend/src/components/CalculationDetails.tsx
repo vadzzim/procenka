@@ -1,6 +1,7 @@
 import { useCalculation } from "../api/queries";
 import type { CalculationOut, OfferOut, RejectedOfferOut } from "../api/types";
 import { formatDateTime, formatMoney, formatPercent } from "../format";
+import { ConfirmQuarantine } from "./ConfirmQuarantine";
 import { ErrorText } from "./ErrorText";
 
 function OffersTable({
@@ -103,6 +104,14 @@ export function CalculationDetails({ id }: { id: number }) {
             {" · "}решение: <strong>{calc.state_label}</strong>
             {calc.reason_label && ` (${calc.reason_label})`}
           </p>
+          {calc.state === "quarantine" && calc.recommended_price && (
+            <ConfirmQuarantine
+              calculationId={calc.id}
+              recommended={calc.recommended_price}
+              published={calc.previous_price}
+              confirmation={calc.confirmation}
+            />
+          )}
         </div>
         <div>
           <h4>Настройки на момент расчёта</h4>

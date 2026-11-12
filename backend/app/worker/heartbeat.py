@@ -1,8 +1,9 @@
 """Liveness of the worker loop for the docker compose healthcheck.
 
 The worker removes a stale heartbeat file at start, touches it once the
-recovery of interrupted runs is done and after every loop iteration
-(``WORKER_HEARTBEAT_FILE``; unset — no file). The healthcheck
+recovery of interrupted runs is done and after every loop iteration that got
+through to the database (``WORKER_HEARTBEAT_FILE``; unset — no file): with the
+database unreachable the file ages and the worker becomes unhealthy. The healthcheck
 ``python -m app.worker.heartbeat <file> --max-age <seconds>`` exits 0 while the
 file is fresh and 1 when it is missing or older than ``max_age``.
 

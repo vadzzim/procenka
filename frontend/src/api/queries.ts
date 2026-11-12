@@ -37,6 +37,8 @@ export function useStatus() {
     void (async () => {
       await queryClient.cancelQueries({ queryKey: queryKeys.products });
       await queryClient.invalidateQueries({ queryKey: queryKeys.products });
+      // Whether a calculation can still be confirmed depends on the latest run.
+      await queryClient.invalidateQueries({ queryKey: ["calculation"] });
     })();
   }, [finishedId, queryClient]);
 
@@ -51,8 +53,24 @@ export function useCalculation(id: number) {
   return useQuery({
     queryKey: queryKeys.calculation(id),
     queryFn: () => api.calculation(id),
-    // A stored calculation never changes.
+    // The numbers never change; the confirmation part is refreshed explicitly
+    // (after a confirmation and when a run finishes, see useStatus).
     staleTime: Infinity,
+  });
+}
+
+/** Confirm a quarantined recommendation; then the table, status and details are refetched. */
+export function useConfirm() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.confirm(id),
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.products }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.status }),
+        queryClient.invalidateQueries({ queryKey: ["calculation"] }),
+      ]);
+    },
   });
 }
 

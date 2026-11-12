@@ -88,6 +88,13 @@ export const products: ProductsOut = {
         reason_label: null,
         change_percent_display: "-1.6",
         partial_data: false,
+      confirmation: {
+        confirmed: false,
+        confirmed_at: null,
+        can_confirm: false,
+        refusal: "not_quarantine",
+        refusal_label: "рекомендация не в карантине: подтверждать нечего",
+      },
       },
     },
     {
@@ -120,6 +127,13 @@ export const products: ProductsOut = {
         reason_label: "скачок цены",
         change_percent_display: "-25.1",
         partial_data: true,
+      confirmation: {
+        confirmed: false,
+        confirmed_at: null,
+        can_confirm: true,
+        refusal: null,
+        refusal_label: null,
+      },
       },
     },
     {
@@ -144,6 +158,13 @@ export const products: ProductsOut = {
         reason_label: "нет предыдущей цены",
         change_percent_display: null,
         partial_data: false,
+      confirmation: {
+        confirmed: false,
+        confirmed_at: null,
+        can_confirm: false,
+        refusal: "superseded",
+        refusal_label: "рекомендация не из последнего завершённого прогона: требуется новый расчёт",
+      },
       },
     },
     {
@@ -176,6 +197,13 @@ export const products: ProductsOut = {
         reason_label: "нет пригодных предложений",
         change_percent_display: null,
         partial_data: false,
+      confirmation: {
+        confirmed: false,
+        confirmed_at: null,
+        can_confirm: false,
+        refusal: "not_quarantine",
+        refusal_label: "рекомендация не в карантине: подтверждать нечего",
+      },
       },
     },
   ],
@@ -279,6 +307,13 @@ export const calculationA: CalculationOut = {
     "Итог 1 240,00: ограничений нет",
     "Изменение = |1 240,00 − 1 260,00| / 1 260,00 × 100 = 1,6 % ≤ 20 % → опубликована",
   ],
+  confirmation: {
+    confirmed: false,
+    confirmed_at: null,
+    can_confirm: false,
+    refusal: "not_quarantine",
+    refusal_label: "рекомендация не в карантине: подтверждать нечего",
+  },
 };
 
 export const modes: DemoModesOut = {

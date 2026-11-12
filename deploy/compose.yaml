@@ -35,7 +35,10 @@ services:
   api:
     build: ../backend
     image: procenka-backend
-    environment: *backend-env
+    environment:
+      <<: *backend-env
+      # How long a quarantined recommendation can be confirmed after its calculation.
+      QUARANTINE_CONFIRM_MAX_AGE_MINUTES: ${QUARANTINE_CONFIRM_MAX_AGE_MINUTES:-60}
     depends_on:
       postgres:
         condition: service_healthy
@@ -62,11 +65,15 @@ services:
       # scenario. Shown separately: SCHEDULE_INTERVAL_SECONDS=60 docker compose up -d worker
       SCHEDULE_INTERVAL_SECONDS: ${SCHEDULE_INTERVAL_SECONDS:-0}
       WORKER_POLL_SECONDS: ${WORKER_POLL_SECONDS:-2}
-      # Touched at start (after recovery) and after every loop iteration.
+      # Touched at start (after recovery) and after every loop iteration that
+      # got through to the database.
       WORKER_HEARTBEAT_FILE: /tmp/worker-heartbeat
+      # Optional proxy of each source (e.g. http://proxy.local:3128); empty = no proxy.
+      HTML_CATALOG_PROXY: ${HTML_CATALOG_PROXY:-}
+      JSON_API_PROXY: ${JSON_API_PROXY:-}
     healthcheck:
-      # Healthy while the loop iterates: the heartbeat is at most 120 s old
-      # (longer than any run: the per-source time budget is 30 s).
+      # Healthy while the loop iterates and reaches the database: the heartbeat is
+      # at most 120 s old (longer than any run: the per-source time budget is 30 s).
       test: ["CMD", "python", "-m", "app.worker.heartbeat", "/tmp/worker-heartbeat", "--max-age", "120"]
       interval: 5s
       timeout: 5s

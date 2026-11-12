@@ -4,10 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 import type {
+  CalculationOut,
+  ConfirmRefusalOut,
   DemoResetOut,
   ErrorOut,
   RunCreated,
   ProductsOut,
+  PublishedPriceOut,
   SourceModeOut,
   StatusOut,
 } from "./api/types";
@@ -333,6 +336,178 @@ describe("demo panel", () => {
     expect(confirm).toHaveBeenCalledTimes(2);
     await waitFor(() =>
       expect(requests.filter((r) => r.path === "/api/demo/reset")).toHaveLength(1),
+    );
+  });
+});
+
+describe("quarantine confirmation", () => {
+  const spikeConfirmed: PublishedPriceOut = {
+    product_id: 2,
+    brand: "MANN-FILTER",
+    article: "W71275",
+    name: "Фильтр масляный",
+    price: "1490.00",
+    published_at: "2026-11-12T04:11:00.000000Z",
+    calculation_id: 27,
+  };
+
+  function confirmedProducts(): ProductsOut {
+    return {
+      products: products.products.map((row) =>
+        row.product.id === 2 && row.latest_calculation
+          ? {
+              ...row,
+              published: {
+                price: "1490.00",
+                published_at: spikeConfirmed.published_at,
+                origin: "confirmation",
+                origin_label: "подтверждена из карантина",
+                calculation_id: 27,
+                calculation_run_id: 2,
+                calculated_at: row.latest_calculation.calculated_at,
+              },
+              latest_calculation: {
+                ...row.latest_calculation,
+                confirmation: {
+                  confirmed: true,
+                  confirmed_at: spikeConfirmed.published_at,
+                  can_confirm: false,
+                  refusal: "already_confirmed",
+                  refusal_label: "рекомендация уже подтверждена и опубликована",
+                },
+              },
+            }
+          : row,
+      ),
+    };
+  }
+
+  it("shows the button only for quarantined rows, disabled with the reason when not allowed", async () => {
+    mockApi(baseRoutes);
+    renderWithClient(<App />);
+
+    const s = await screen.findByTestId("product-2");
+    expect(within(s).getByRole("button", { name: "Подтвердить" })).toBeEnabled();
+    expect(within(rowOf(1)).queryByRole("button", { name: "Подтвердить" })).not.toBeInTheDocument();
+    expect(within(rowOf(5)).queryByRole("button", { name: "Подтвердить" })).not.toBeInTheDocument();
+
+    const febiButton = within(rowOf(4)).getByRole("button", { name: "Подтвердить" });
+    expect(febiButton).toBeDisabled();
+    const reason = "рекомендация не из последнего завершённого прогона: требуется новый расчёт";
+    expect(febiButton).toHaveAttribute("title", reason);
+    expect(within(rowOf(4)).getByText(reason)).toBeInTheDocument();
+  });
+
+  it("asks before publishing and does nothing when cancelled", async () => {
+    const requests = mockApi(baseRoutes);
+    const ask = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const user = userEvent.setup();
+    renderWithClient(<App />);
+
+    const s = await screen.findByTestId("product-2");
+    await user.click(within(s).getByRole("button", { name: "Подтвердить" }));
+
+    expect(ask).toHaveBeenCalledWith("Опубликовать 1 490,00 ₽ вместо 1 990,00 ₽?");
+    expect(requests.some((r) => r.method === "POST")).toBe(false);
+  });
+
+  it("publishes on confirmation and refetches products and status", async () => {
+    let confirmed = false;
+    const requests = mockApi({
+      ...baseRoutes,
+      "GET /api/products": () => ({
+        status: 200,
+        body: confirmed ? confirmedProducts() : products,
+      }),
+      "POST /api/calculations/27/confirm": () => {
+        confirmed = true;
+        return { status: 200, body: spikeConfirmed };
+      },
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    renderWithClient(<App />);
+
+    const s = await screen.findByTestId("product-2");
+    const productsBefore = requests.filter((r) => r.path === "/api/products").length;
+    const statusBefore = requests.filter((r) => r.path === "/api/status").length;
+    await user.click(within(s).getByRole("button", { name: "Подтвердить" }));
+
+    await within(rowOf(2)).findByText(/^подтверждена, /);
+    expect(requests.filter((r) => r.method === "POST")).toEqual([
+      { method: "POST", path: "/api/calculations/27/confirm", body: undefined },
+    ]);
+    expect(requests.filter((r) => r.path === "/api/products").length).toBeGreaterThan(
+      productsBefore,
+    );
+    expect(requests.filter((r) => r.path === "/api/status").length).toBeGreaterThan(statusBefore);
+    const row = rowOf(2);
+    expect(within(row).queryByRole("button", { name: "Подтвердить" })).not.toBeInTheDocument();
+    expect(within(row).getByText("карантин")).toBeInTheDocument(); // the state stays
+    expect(within(row).getAllByText("1 490,00 ₽")).toHaveLength(2); // published and recommended
+    expect(within(row).getByText(/^подтверждена из карантина, /)).toBeInTheDocument();
+  });
+
+  it("shows the Russian reason when the server refuses with 409", async () => {
+    const refusal: ConfirmRefusalOut = {
+      code: "superseded",
+      detail: "рекомендация не из последнего завершённого прогона: требуется новый расчёт",
+    };
+    mockApi({
+      ...baseRoutes,
+      "POST /api/calculations/27/confirm": { status: 409, body: refusal },
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    renderWithClient(<App />);
+
+    const s = await screen.findByTestId("product-2");
+    await user.click(within(s).getByRole("button", { name: "Подтвердить" }));
+
+    const alert = await within(rowOf(2)).findByRole("alert");
+    expect(alert).toHaveTextContent(refusal.detail);
+  });
+
+  it("offers the button in «Почему цена такая» of a quarantined calculation", async () => {
+    const calculationS: CalculationOut = {
+      ...calculationA,
+      id: 27,
+      run_id: 2,
+      recommended_price: "1490.00",
+      previous_price: "1990.00",
+      state: "quarantine",
+      state_label: "карантин",
+      reason: "price_spike",
+      reason_label: "скачок цены",
+      confirmation: {
+        confirmed: false,
+        confirmed_at: null,
+        can_confirm: true,
+        refusal: null,
+        refusal_label: null,
+      },
+    };
+    const requests = mockApi({
+      ...baseRoutes,
+      "GET /api/calculations/27": { body: calculationS },
+      "POST /api/calculations/27/confirm": { body: spikeConfirmed },
+    });
+    const ask = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    renderWithClient(<App />);
+
+    const s = await screen.findByTestId("product-2");
+    await user.click(within(s).getByRole("button", { name: "Почему цена такая" }));
+    const details = await screen.findByLabelText("Почему цена такая");
+    await user.click(within(details).getByRole("button", { name: "Подтвердить" }));
+
+    expect(ask).toHaveBeenCalledWith("Опубликовать 1 490,00 ₽ вместо 1 990,00 ₽?");
+    await waitFor(() =>
+      expect(requests.filter((r) => r.path === "/api/calculations/27/confirm")).toHaveLength(1),
+    );
+    // The details are refetched after the confirmation.
+    await waitFor(() =>
+      expect(requests.filter((r) => r.path === "/api/calculations/27")).toHaveLength(2),
     );
   });
 });

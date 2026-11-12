@@ -289,3 +289,15 @@ tr.details-row > td {
   font-weight: 600;
   padding: 4px 0;
 }
+
+.confirm {
+  margin-top: 6px;
+  max-width: 240px;
+}
+
+.badge.confirmed {
+  background: #dafbe1;
+  color: #116329;
+  font-weight: 600;
+  white-space: normal;
+}

@@ -6,8 +6,12 @@ Order of work (``plan.md``, "Прогоны и устойчивость"):
 2. Every source is collected over HTTP with no database session at all.
 3. Transaction 1 writes source results, offers (one batch insert) and one
    calculation per product, made from the offers of this run only.
-4. Transaction 2, short, finishes the run and publishes the calculations in
-   state ``published`` with ``INSERT ... ON CONFLICT (product_id) DO UPDATE``.
+4. Transaction 2, short, takes the publication lock (``app.db.publication``),
+   finishes the run and publishes the calculations in state ``published`` with
+   ``INSERT ... ON CONFLICT (product_id) DO UPDATE``. A product whose published
+   price changed after transaction 1 read it (a quarantined recommendation was
+   confirmed in between) is calculated again from the same offers against the
+   price published now, and its calculation row is updated first.
 
 Run status: every source ok -> succeeded; some failed -> partial (calculations
 carry ``partial_data``); all failed -> failed, no offers or calculations are
@@ -16,7 +20,7 @@ written and published prices do not change.
 
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any
 
@@ -26,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.enums import RunFinishReason, RunStatus, SourceStatus
 from app.db.models import Calculation, Offer, Product, PublishedPrice, Run, SourceResult
+from app.db.publication import Publication, lock_publication, upsert_published_prices
 from app.logs import bind_product_id, get_logger
 from app.parsers.base import OfferSource, SourceCollection, collect_all
 from app.pricing import models as pricing
@@ -94,15 +99,14 @@ async def record_run(
     global_settings: pricing.GlobalSettings,
 ) -> RunOutcome:
     status = run_status(collections)
-    publications: list[tuple[int, int, Decimal]] = []  # (product_id, calculation_id, price)
-    calculations = 0
+    calculated: list[_Calculated] = []
     async with session_factory() as session:
         async with session.begin():
             await _insert_source_results(session, run_id, collections)
             if status is not RunStatus.FAILED:
                 products = await _load_products(session)
                 offers = await _insert_offers(session, run_id, collections, products)
-                calculations, publications = await _calculate(
+                calculated = await _calculate(
                     session,
                     run_id,
                     products,
@@ -111,11 +115,22 @@ async def record_run(
                     partial_data=status is RunStatus.PARTIAL,
                 )
         async with session.begin():
-            await _finish_run(session, run_id, status)
-            await _publish(session, publications)
+            calculated = await finish_and_publish(session, run_id, status, calculated)
+        publications = _publications(calculated)
     return RunOutcome(
-        run_id=run_id, status=status, calculations=calculations, published=len(publications)
+        run_id=run_id, status=status, calculations=len(calculated), published=len(publications)
     )
+
+
+async def finish_and_publish(
+    session: AsyncSession, run_id: int, status: RunStatus, calculated: Sequence["_Calculated"]
+) -> list["_Calculated"]:
+    """Transaction 2 of a run (the caller commits): lock, finish, refresh, publish."""
+    await lock_publication(session)
+    await _finish_run(session, run_id, status)
+    refreshed = await _recalculate_stale(session, calculated)
+    await upsert_published_prices(session, _publications(refreshed))
+    return refreshed
 
 
 async def _insert_source_results(
@@ -256,6 +271,45 @@ def calculation_row(run_id: int, product_id: int, result: pricing.PricingResult)
     }
 
 
+@dataclass(frozen=True, slots=True)
+class _Calculated:
+    """A calculation written in transaction 1, with what is needed to redo it."""
+
+    calculation_id: int
+    item: _ProductInput
+    offers: tuple[pricing.Offer, ...]
+    result: pricing.PricingResult
+
+
+def _price(
+    item: _ProductInput,
+    offers: Sequence[pricing.Offer],
+    *,
+    global_settings: pricing.GlobalSettings,
+    partial_data: bool,
+) -> pricing.PricingResult:
+    with bind_product_id(item.id):
+        result = calculate_price(
+            item.product,
+            item.settings,
+            offers,
+            global_settings=global_settings,
+            partial_data=partial_data,
+        )
+        logger.info(
+            "price calculated",
+            state=result.state.value,
+            reason=None if result.reason is None else result.reason.value,
+            recommended_price=None
+            if result.recommended_price is None
+            else str(result.recommended_price),
+            accepted_offers=len(result.accepted_offers),
+            rejected_offers=len(result.rejected_offers),
+            partial_data=partial_data,
+        )
+    return result
+
+
 async def _calculate(
     session: AsyncSession,
     run_id: int,
@@ -264,50 +318,86 @@ async def _calculate(
     *,
     global_settings: pricing.GlobalSettings,
     partial_data: bool,
-) -> tuple[int, list[tuple[int, int, Decimal]]]:
+) -> list[_Calculated]:
     """Calculate every product from this run's offers with its article; the core
     then accepts or rejects each offer (other brand, suspicious price, ...)."""
     by_article: defaultdict[str, list[pricing.Offer]] = defaultdict(list)
     for offer in offers:
         by_article[normalize_article(offer.article)].append(offer)
 
-    results: dict[int, pricing.PricingResult] = {}
+    pending: dict[int, tuple[_ProductInput, tuple[pricing.Offer, ...], pricing.PricingResult]] = {}
     for item in products:
-        with bind_product_id(item.id):
-            result = calculate_price(
-                item.product,
-                item.settings,
-                by_article.get(item.product.normalized_article, ()),
-                global_settings=global_settings,
-                partial_data=partial_data,
-            )
-            logger.info(
-                "price calculated",
-                state=result.state.value,
-                reason=None if result.reason is None else result.reason.value,
-                recommended_price=None
-                if result.recommended_price is None
-                else str(result.recommended_price),
-                accepted_offers=len(result.accepted_offers),
-                rejected_offers=len(result.rejected_offers),
-                partial_data=partial_data,
-            )
-        results[item.id] = result
-    if not results:
-        return 0, []
+        product_offers = tuple(by_article.get(item.product.normalized_article, ()))
+        result = _price(
+            item, product_offers, global_settings=global_settings, partial_data=partial_data
+        )
+        pending[item.id] = (item, product_offers, result)
+    if not pending:
+        return []
     inserted = await session.execute(
         insert(Calculation)
-        .values([calculation_row(run_id, product_id, r) for product_id, r in results.items()])
+        .values([calculation_row(run_id, pid, result) for pid, (_, _, result) in pending.items()])
         .returning(Calculation.id, Calculation.product_id)
     )
+    calculated = [
+        _Calculated(calculation_id, *pending[product_id]) for calculation_id, product_id in inserted
+    ]
+    calculated.sort(key=lambda calc: calc.item.id)
+    return calculated
+
+
+async def _recalculate_stale(
+    session: AsyncSession, calculated: Sequence[_Calculated]
+) -> list[_Calculated]:
+    """Redo the calculations whose published price changed since transaction 1.
+
+    Called under the publication lock, so the published prices read here stay
+    as they are until the commit. Outside a run only a confirmed quarantine
+    changes a published price; the new calculation compares the recommendation
+    with the price that is actually published now (same offers, same settings).
+    """
+    if not calculated:
+        return []
+    rows = await session.execute(select(PublishedPrice.product_id, PublishedPrice.price))
+    current: dict[int, Decimal] = {product_id: price for product_id, price in rows}
+    refreshed: list[_Calculated] = []
+    for calc in calculated:
+        read_price = calc.item.product.published_price
+        published_now = current.get(calc.item.id)
+        if published_now == read_price:
+            refreshed.append(calc)
+            continue
+        item = replace(calc.item, product=replace(calc.item.product, published_price=published_now))
+        with bind_product_id(item.id):
+            logger.warning(
+                "published price changed during the run; calculating again",
+                read_price=None if read_price is None else str(read_price),
+                published_price=None if published_now is None else str(published_now),
+            )
+        result = _price(
+            item,
+            calc.offers,
+            global_settings=calc.result.global_settings,
+            partial_data=calc.result.partial_data,
+        )
+        row = calculation_row(0, item.id, result)
+        del row["run_id"], row["product_id"]
+        await session.execute(
+            update(Calculation).where(Calculation.id == calc.calculation_id).values(**row)
+        )
+        refreshed.append(_Calculated(calc.calculation_id, item, calc.offers, result))
+    return refreshed
+
+
+def _publications(calculated: Sequence[_Calculated]) -> list[Publication]:
     publications = []
-    for calculation_id, product_id in inserted:
-        result = results[product_id]
-        if result.state is pricing.ResultState.PUBLISHED:
-            assert result.recommended_price is not None
-            publications.append((product_id, calculation_id, result.recommended_price))
-    publications.sort()
-    return len(results), publications
+    for calc in calculated:
+        if calc.result.state is pricing.ResultState.PUBLISHED:
+            assert calc.result.recommended_price is not None
+            publications.append(
+                Publication(calc.item.id, calc.calculation_id, calc.result.recommended_price)
+            )
+    return publications
 
 
 async def _finish_run(session: AsyncSession, run_id: int, status: RunStatus) -> None:
@@ -320,32 +410,6 @@ async def _finish_run(session: AsyncSession, run_id: int, status: RunStatus) -> 
     )
     if finished is None:
         raise RunNotRunningError(f"run {run_id} is not running; nothing is published")
-
-
-async def _publish(session: AsyncSession, publications: Sequence[tuple[int, int, Decimal]]) -> None:
-    if not publications:
-        return
-    statement = insert(PublishedPrice).values(
-        [
-            {
-                "product_id": product_id,
-                "price": price,
-                "published_at": func.now(),
-                "calculation_id": calculation_id,
-            }
-            for product_id, calculation_id, price in publications
-        ]
-    )
-    await session.execute(
-        statement.on_conflict_do_update(
-            index_elements=[PublishedPrice.product_id],
-            set_={
-                "price": statement.excluded.price,
-                "published_at": statement.excluded.published_at,
-                "calculation_id": statement.excluded.calculation_id,
-            },
-        )
-    )
 
 
 async def fail_run(

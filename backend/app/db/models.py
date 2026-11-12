@@ -215,6 +215,11 @@ class Calculation(Base):
             "(state IN ('published', 'unchanged')) = (reason IS NULL)",
             name="reason_matches_state",
         ),
+        # Only a quarantined recommendation is confirmed (extension 1 of plan.md).
+        CheckConstraint(
+            "confirmed_at IS NULL OR state = 'quarantine'",
+            name="confirmed_only_quarantine",
+        ),
         Index("ix_calculations_product_id", "product_id"),
     )
 
@@ -253,3 +258,7 @@ class Calculation(Base):
     calculated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    # When the manager confirmed this quarantined recommendation and it was
+    # published (app.db.confirm); the state stays "quarantine". Who confirmed is
+    # not stored: the demo has no users.
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

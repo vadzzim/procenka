@@ -7,7 +7,8 @@
 2. every iteration: queue a scheduled run if it is due (decided from the
    database), claim the oldest queued run with ``FOR UPDATE SKIP LOCKED`` and
    execute it, touch the heartbeat file (``WORKER_HEARTBEAT_FILE``, for the
-   compose healthcheck), then pause ``WORKER_POLL_SECONDS``.
+   compose healthcheck) if the iteration got through to the database, then
+   pause ``WORKER_POLL_SECONDS``.
 
 An exception in one iteration is logged and the loop goes on; a run whose
 execution raised is failed with ``internal_error`` (retried in the next
@@ -164,19 +165,28 @@ async def run_worker(
     # it would block every new run until a restart, so it is retried first.
     unrecorded: int | None = None
     while not stop.is_set():
+        # The heartbeat is touched only after an iteration that got through to the
+        # database: with the database unreachable every iteration fails, the file
+        # ages and the healthcheck turns the worker unhealthy after --max-age.
+        talked_to_database = False
         try:
             if unrecorded is not None:
                 await record_crash(session_factory, unrecorded)
                 unrecorded = None
             await worker_iteration(session_factory, sources, settings, now)
+            talked_to_database = True
         except RunCrashedError as crash:
-            # Already logged with its run id.
-            if not crash.recorded:
+            # Already logged with its run id. A recorded crash was written to the
+            # database (a bug in the run, not a lost database).
+            if crash.recorded:
+                talked_to_database = True
+            else:
                 unrecorded = crash.run_id
         except Exception:
             # E.g. the database is unreachable; the next iteration tries again.
             logger.exception("worker iteration failed")
-        heartbeat(settings.worker_heartbeat_file)
+        if talked_to_database:
+            heartbeat(settings.worker_heartbeat_file)
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(stop.wait(), timeout=settings.worker_poll_seconds)
     logger.info("worker stopped")

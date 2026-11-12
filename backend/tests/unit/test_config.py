@@ -124,3 +124,40 @@ def test_worker_defaults_and_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SCHEDULE_INTERVAL_SECONDS", "-1")
     with pytest.raises(ValidationError):
         Settings()
+
+
+@pytest.mark.parametrize("value", ["", "  "])
+def test_empty_proxy_means_no_proxy(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    """compose passes ``${HTML_CATALOG_PROXY:-}``: an unset variable arrives as ""."""
+    monkeypatch.setenv("HTML_CATALOG_PROXY", value)
+    monkeypatch.setenv("JSON_API_PROXY", value)
+    monkeypatch.setenv("ENABLED_SOURCES", '["html_catalog","json_api"]')
+    settings = Settings()
+    assert settings.html_catalog_proxy is None
+    assert settings.json_api_proxy is None
+    html, json_api = build_sources(settings)
+    assert isinstance(html, HtmlCatalogSource)
+    assert isinstance(json_api, JsonApiSource)
+    assert html._proxy is None
+    assert json_api._proxy is None
+
+
+def test_proxy_values_reach_their_sources(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HTML_CATALOG_PROXY", "http://html-proxy:3128")
+    monkeypatch.setenv("JSON_API_PROXY", "http://json-proxy:3128")
+    monkeypatch.setenv("ENABLED_SOURCES", '["html_catalog","json_api"]')
+    html, json_api = build_sources(Settings())
+    assert isinstance(html, HtmlCatalogSource)
+    assert isinstance(json_api, JsonApiSource)
+    assert html._proxy == "http://html-proxy:3128"
+    assert json_api._proxy == "http://json-proxy:3128"
+
+
+def test_quarantine_confirm_max_age(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("QUARANTINE_CONFIRM_MAX_AGE_MINUTES", raising=False)
+    assert Settings().quarantine_confirm_max_age_minutes == 60
+    monkeypatch.setenv("QUARANTINE_CONFIRM_MAX_AGE_MINUTES", "5")
+    assert Settings().quarantine_confirm_max_age_minutes == 5
+    monkeypatch.setenv("QUARANTINE_CONFIRM_MAX_AGE_MINUTES", "0")
+    with pytest.raises(ValidationError):
+        Settings()

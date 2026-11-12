@@ -78,7 +78,8 @@ curl -X POST http://127.0.0.1:8000/api/runs         # поставить про�
 curl http://127.0.0.1:8000/api/runs/<id>            # статус прогона и источников
 curl http://127.0.0.1:8000/api/status               # последний, активный и последний завершённый прогон с источниками
 curl http://127.0.0.1:8000/api/products             # таблица экрана: закупка, опубликованная цена, последний расчёт
-curl http://127.0.0.1:8000/api/calculations/<id>    # «Почему цена такая»: предложения, границы, формула
+curl http://127.0.0.1:8000/api/calculations/<id>    # «Почему цена такая»: предложения, границы, формула, confirmation
+curl -X POST http://127.0.0.1:8000/api/calculations/<id>/confirm   # подтвердить карантин: 200 цена, 409 {code, detail}, 404
 curl http://127.0.0.1:8000/api/published-prices     # опубликованные цены
 curl http://127.0.0.1:8000/api/demo/modes           # режимы источников через API (прокси к fake-sites)
 curl -X PUT http://127.0.0.1:8000/api/demo/modes/html_catalog -H 'content-type: application/json' -d '{"mode":"markup_changed"}'
@@ -96,22 +97,26 @@ SCHEDULE_INTERVAL_SECONDS=60 docker compose up -d worker   # показать р
 
 Логи api и worker — structlog, одна JSON-строка на запись в stdout (`timestamp`, `level`, `logger`, `event`, `service` и контекст). Каждая строка воркера содержит `run_id` (`null` вне прогона); строки сбора источника — ещё `source`, строки расчёта товара — `product_id`. Трассировка исключения — поле `exception` той же строки. Например: `docker compose logs worker | grep '"run_id": 3'`.
 
-Healthcheck воркера: воркер удаляет старый файл `WORKER_HEARTBEAT_FILE` при старте, создаёт его после восстановления и обновляет после каждой итерации; healthcheck — `python -m app.worker.heartbeat /tmp/worker-heartbeat --max-age 120` (файл не старше 120 с). Поэтому `docker compose up --wait` ждёт, пока все 5 сервисов (postgres, fake-sites, api, worker, nginx) станут healthy.
+Healthcheck воркера: воркер удаляет старый файл `WORKER_HEARTBEAT_FILE` при старте, создаёт его после восстановления и обновляет после каждой итерации, которая дошла до БД (при недоступной БД файл стареет, и через 120 с воркер становится unhealthy); healthcheck — `python -m app.worker.heartbeat /tmp/worker-heartbeat --max-age 120` (файл не старше 120 с). Поэтому `docker compose up --wait` ждёт, пока все 5 сервисов (postgres, fake-sites, api, worker, nginx) станут healthy.
 
 Режимы: `normal`, `markup_changed`, `unavailable`, `blocked`, `price_spike`; источники `html_catalog`, `json_api`. Режимы живут в памяти fake-sites и сбрасываются при его перезапуске.
+
+Прокси источников: `HTML_CATALOG_PROXY`, `JSON_API_PROXY` (compose передаёт их воркеру; пусто или не задано — без прокси).
+
+Подтверждение карантина (расширение 1): `POST /api/calculations/{id}/confirm`, логика — `app/db/confirm.py`, коды отказа и подписи — там же (`CONFIRM_REFUSAL_LABELS`). Максимальный возраст — `QUARANTINE_CONFIRM_MAX_AGE_MINUTES` (по умолчанию 60, compose передаёт его api), по часам БД. Подтверждение и транзакция публикации прогона берут одну advisory-блокировку `app/db/publication.py` (`lock_publication`); любая новая запись в `published_prices` должна идти под ней. Правило — `docs/pricing.md`, «Подтверждение карантина».
 
 Без контейнеров api и worker: `uv run --directory backend python -m app.api` (или `uvicorn app.api.main:app`), `uv run --directory fake_sites uvicorn fake_sites.app:app --port 8001` и `uv run --directory backend python -m app.worker.once` (поставить и выполнить один прогон без воркера). Новая миграция: `uv run --directory backend alembic revision --autogenerate -m "..."`, затем проверить и поправить файл (типы enum в `downgrade` удаляются вручную).
 
 ## Приёмка
 
-Скрипт сценария показа (`plan.md`, «Сценарий показа — 5 минут», все 7 шагов) через API, как экран, — только через nginx, БД не трогает. Нужен поднятый стек (`docker compose up --build -d --wait`), поэтому в «Команды проверки» не входит, но перед коммитом шага должен пройти:
+Скрипт сценария показа (`plan.md`, «Сценарий показа — 5 минут», все 7 шагов, и шаг 8 — подтверждение карантина, расширение 1) через API, как экран, — только через nginx, БД не трогает. Нужен поднятый стек (`docker compose up --build -d --wait`), поэтому в «Команды проверки» не входит, но перед коммитом шага должен пройти:
 
 ```sh
 uv run --directory backend python ../scripts/demo_scenario.py                      # по умолчанию http://127.0.0.1:8080
 uv run --directory backend python ../scripts/demo_scenario.py --base-url http://127.0.0.1:8080
 ```
 
-Печатает «ШАГ N … OK/FAIL» с ключевыми числами; при первом расхождении — FAIL и код 1, демо остаётся как есть. Перед шагом 2 сбрасывает демо (ждёт активный прогон), после шага 7 — снова сброс, поэтому повторяем. Шаг 7 запускает `tests/unit/pricing/test_control_cases.py` подпроцессом и проверяет строку `control cases: N matched, 0 mismatched`.
+Печатает «ШАГ N … OK/FAIL» с ключевыми числами; при первом расхождении — FAIL и код 1, демо остаётся как есть. Перед шагом 2 сбрасывает демо (ждёт активный прогон), после шага 8 — снова сброс, поэтому повторяем. Шаг 8 подтверждает S (в выдаче 1490.00 с `calculation_id` этого расчёта), повторно — 409 `already_confirmed`, после нового прогона подтверждение старого расчёта Febi — 409 `superseded`. Шаг 7 запускает `tests/unit/pricing/test_control_cases.py` подпроцессом и проверяет строку `control cases: N matched, 0 mismatched`.
 
 ## Соглашения
 

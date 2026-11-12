@@ -188,6 +188,11 @@ async def test_money_columns_keep_two_decimals(db_session: AsyncSession) -> None
             {"state": ResultState.RETAINED, "recommended_price": None},
             "ck_calculations_reason_matches_state",
         ),
+        # Only a quarantined recommendation is confirmed.
+        (
+            {"confirmed_at": datetime(2026, 11, 12, tzinfo=UTC)},
+            "ck_calculations_confirmed_only_quarantine",
+        ),
     ],
 )
 async def test_calculation_state_consistency(

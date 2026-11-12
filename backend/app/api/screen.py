@@ -8,12 +8,13 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.orm import aliased
 
-from app.api.deps import SessionFactory
+from app.api.deps import ConfirmMaxAge, SessionFactory
 from app.api.runs import load_run_out
 from app.api.schemas import (
     PRICE_ORIGIN_LABELS,
     CalculationInputsOut,
     CalculationOut,
+    ConfirmationOut,
     ConstraintOut,
     ErrorOut,
     LatestCalculationOut,
@@ -26,7 +27,14 @@ from app.api.schemas import (
     RejectedOfferOut,
     StatusOut,
 )
-from app.db.enums import ACTIVE_RUN_STATUSES, SOURCE_LABELS, RunStatus, Source
+from app.db.confirm import (
+    CONFIRM_REFUSAL_LABELS,
+    FINISHED_RUN_STATUSES,
+    ConfirmContext,
+    confirm_context,
+    confirm_refusal,
+)
+from app.db.enums import ACTIVE_RUN_STATUSES, SOURCE_LABELS, Source
 from app.db.models import Calculation, Product, PublishedPrice, Run
 from app.pricing.explain import FormulaInput, formula_lines
 from app.pricing.models import LABELS, Constraint, OfferRejection
@@ -35,7 +43,7 @@ router = APIRouter(prefix="/api")
 
 # Runs whose calculations the screen shows: an interrupted or failed run may have
 # recorded calculations, but they were never published and are not the latest word.
-SHOWN_RUN_STATUSES = (RunStatus.SUCCEEDED, RunStatus.PARTIAL)
+SHOWN_RUN_STATUSES = FINISHED_RUN_STATUSES
 
 
 @router.get("/status")
@@ -71,7 +79,7 @@ def product_out(product: Product) -> ProductOut:
 
 
 @router.get("/products")
-async def get_products(session_factory: SessionFactory) -> ProductsOut:
+async def get_products(session_factory: SessionFactory, max_age: ConfirmMaxAge) -> ProductsOut:
     """Таблица товаров: закупка, опубликованная цена и последний расчёт.
 
     Последний расчёт берётся только из прогонов succeeded и partial.
@@ -95,12 +103,15 @@ async def get_products(session_factory: SessionFactory) -> ProductsOut:
             .outerjoin(latest, latest.id == latest_ids.c.id)
             .order_by(Product.id)
         )
+        context = await confirm_context(session, max_age=max_age)
         products = [
             ProductRowOut(
                 product=product_out(product),
                 purchase_price=product.purchase_price,
                 published=_published_info(published, source_calc),
-                latest_calculation=_latest_out(calc),
+                latest_calculation=_latest_out(
+                    calc, product, None if published is None else published.price, context
+                ),
             )
             for product, published, source_calc, calc in rows
         ]
@@ -112,7 +123,12 @@ def _published_info(
 ) -> PublishedPriceInfo | None:
     if published is None:
         return None
-    origin = PriceOrigin.SEED if calculation is None else PriceOrigin.CALCULATION
+    if calculation is None:
+        origin = PriceOrigin.SEED
+    elif calculation.confirmed_at is not None:
+        origin = PriceOrigin.CONFIRMATION
+    else:
+        origin = PriceOrigin.CALCULATION
     return PublishedPriceInfo(
         price=published.price,
         published_at=published.published_at,
@@ -124,7 +140,28 @@ def _published_info(
     )
 
 
-def _latest_out(calculation: Calculation | None) -> LatestCalculationOut | None:
+def confirmation_out(
+    calculation: Calculation,
+    product: Product,
+    published_price: Decimal | None,
+    context: ConfirmContext,
+) -> ConfirmationOut:
+    refusal = confirm_refusal(calculation, product, published_price, context)
+    return ConfirmationOut(
+        confirmed=calculation.confirmed_at is not None,
+        confirmed_at=calculation.confirmed_at,
+        can_confirm=refusal is None,
+        refusal=refusal,
+        refusal_label=None if refusal is None else CONFIRM_REFUSAL_LABELS[refusal],
+    )
+
+
+def _latest_out(
+    calculation: Calculation | None,
+    product: Product,
+    published_price: Decimal | None,
+    context: ConfirmContext,
+) -> LatestCalculationOut | None:
     if calculation is None:
         return None
     return LatestCalculationOut(
@@ -138,6 +175,7 @@ def _latest_out(calculation: Calculation | None) -> LatestCalculationOut | None:
         reason_label=None if calculation.reason is None else LABELS[calculation.reason],
         change_percent_display=calculation.change_percent_display,
         partial_data=calculation.partial_data,
+        confirmation=confirmation_out(calculation, product, published_price, context),
     )
 
 
@@ -187,7 +225,9 @@ def formula_input(calculation: Calculation) -> FormulaInput:
 
 
 @router.get("/calculations/{calculation_id}", responses={404: {"model": ErrorOut}})
-async def get_calculation(calculation_id: int, session_factory: SessionFactory) -> CalculationOut:
+async def get_calculation(
+    calculation_id: int, session_factory: SessionFactory, max_age: ConfirmMaxAge
+) -> CalculationOut:
     """«Почему цена такая»: вход, предложения, границы, ограничения, решение и формула."""
     async with session_factory() as session:
         row = (
@@ -198,9 +238,13 @@ async def get_calculation(calculation_id: int, session_factory: SessionFactory) 
                 .where(Calculation.id == calculation_id)
             )
         ).one_or_none()
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Расчёт не найден")
-    calculation, product, run_status = row
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Расчёт не найден")
+        calculation, product, run_status = row
+        published_price = await session.scalar(
+            select(PublishedPrice.price).where(PublishedPrice.product_id == product.id)
+        )
+        context = await confirm_context(session, max_age=max_age)
     constraints = [Constraint(code) for code in calculation.applied_constraints]
     return CalculationOut(
         id=calculation.id,
@@ -236,4 +280,5 @@ async def get_calculation(calculation_id: int, session_factory: SessionFactory) 
         reason=calculation.reason,
         reason_label=None if calculation.reason is None else LABELS[calculation.reason],
         formula=formula_lines(formula_input(calculation)),
+        confirmation=confirmation_out(calculation, product, published_price, context),
     )

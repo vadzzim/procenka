@@ -146,6 +146,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/calculations/{calculation_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm
+         * @description Подтвердить рекомендацию из карантина и опубликовать её.
+         *
+         *     Можно только рекомендацию последнего завершённого прогона, не старше
+         *     допустимого возраста, если закупка, версия правил, настройки товара и
+         *     опубликованная цена не изменились с момента расчёта. Проверка и запись —
+         *     в одной транзакции.
+         */
+        post: operations["confirm_api_calculations__calculation_id__confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/demo/modes": {
         parameters: {
             query?: never;
@@ -307,6 +332,40 @@ export interface components {
             reason_label: string | null;
             /** Formula */
             formula: string[];
+            confirmation: components["schemas"]["ConfirmationOut"];
+        };
+        /**
+         * ConfirmRefusal
+         * @enum {string}
+         */
+        ConfirmRefusal: "not_quarantine" | "already_confirmed" | "superseded" | "too_old" | "purchase_changed" | "rules_changed" | "settings_changed" | "published_changed";
+        /**
+         * ConfirmRefusalOut
+         * @description 409 of a confirmation: the code and its Russian reason.
+         */
+        ConfirmRefusalOut: {
+            code: components["schemas"]["ConfirmRefusal"];
+            /** Detail */
+            detail: string;
+        };
+        /**
+         * ConfirmationOut
+         * @description Confirmation of a quarantined recommendation (extension 1 of plan.md).
+         *
+         *     ``can_confirm`` says whether POST /api/calculations/{id}/confirm would publish
+         *     now; otherwise ``refusal`` is the code it would answer with (409) and
+         *     ``refusal_label`` its Russian reason, e.g. for a disabled button.
+         */
+        ConfirmationOut: {
+            /** Confirmed */
+            confirmed: boolean;
+            /** Confirmed At */
+            confirmed_at: string | null;
+            /** Can Confirm */
+            can_confirm: boolean;
+            refusal: components["schemas"]["ConfirmRefusal"] | null;
+            /** Refusal Label */
+            refusal_label: string | null;
         };
         /**
          * Constraint
@@ -386,6 +445,7 @@ export interface components {
             change_percent_display: string | null;
             /** Partial Data */
             partial_data: boolean;
+            confirmation: components["schemas"]["ConfirmationOut"];
         };
         /** ModeChange */
         ModeChange: {
@@ -426,7 +486,7 @@ export interface components {
          * PriceOrigin
          * @enum {string}
          */
-        PriceOrigin: "calculation" | "seed";
+        PriceOrigin: "calculation" | "confirmation" | "seed";
         /** ProductOut */
         ProductOut: {
             /** Id */
@@ -864,6 +924,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_api_calculations__calculation_id__confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                calculation_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishedPriceOut"];
+                };
+            };
+            /** @description Расчёт не найден */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Подтвердить нельзя: код и причина; ничего не опубликовано */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfirmRefusalOut"];
                 };
             };
             /** @description Validation Error */

@@ -7,6 +7,7 @@ import type {
   DemoModesOut,
   DemoResetOut,
   ProductsOut,
+  PublishedPriceOut,
   RunCreated,
   Source,
   SourceModeOut,
@@ -59,6 +60,13 @@ export const api = {
       }),
     ),
   startRun: (): Promise<RunCreated> => unwrap(client.POST("/api/runs")),
+  /** 409 carries the Russian reason in `detail`: it becomes the error message. */
+  confirm: (id: number): Promise<PublishedPriceOut> =>
+    unwrap(
+      client.POST("/api/calculations/{calculation_id}/confirm", {
+        params: { path: { calculation_id: id } },
+      }),
+    ),
   modes: (): Promise<DemoModesOut> => unwrap(client.GET("/api/demo/modes")),
   setMode: (source: Source, mode: DemoMode): Promise<SourceModeOut> =>
     unwrap(

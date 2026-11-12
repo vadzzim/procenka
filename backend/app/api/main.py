@@ -2,12 +2,13 @@
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import timedelta
 
 import httpx
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.api import demo, health, routes, screen
+from app.api import confirm, demo, health, routes, screen
 from app.config import get_settings
 from app.db.session import create_engine, create_session_factory
 from app.logs import configure_logging
@@ -46,6 +47,9 @@ def create_app(
     application = FastAPI(title="Проценка", version="0.1.0", lifespan=lifespan)
     if session_factory is not None:
         application.state.session_factory = session_factory
+    application.state.confirm_max_age = timedelta(
+        minutes=settings.quarantine_confirm_max_age_minutes
+    )
     application.state.fake_sites = httpx.AsyncClient(
         base_url=settings.fake_sites_url,
         timeout=FAKE_SITES_TIMEOUT_SECONDS,
@@ -54,6 +58,7 @@ def create_app(
     application.include_router(health.router)
     application.include_router(routes.router)
     application.include_router(screen.router)
+    application.include_router(confirm.router)
     application.include_router(demo.router)
     return application
 

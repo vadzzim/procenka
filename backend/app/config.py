@@ -8,7 +8,7 @@ from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.db.enums import Source
@@ -42,7 +42,8 @@ class Settings(BaseSettings):
     )
     # Base URL of the fake-sites service that hosts both synthetic sources.
     fake_sites_url: str = DEFAULT_FAKE_SITES_URL
-    # Optional proxy of each source, passed to httpx.AsyncClient.
+    # Optional proxy of each source, passed to httpx.AsyncClient. An empty value
+    # means no proxy: compose passes ``${HTML_CATALOG_PROXY:-}`` when it is unset.
     html_catalog_proxy: str | None = None
     json_api_proxy: str | None = None
     # Timeout of one HTTP request to a source and the number of concurrent requests per source.
@@ -62,6 +63,17 @@ class Settings(BaseSettings):
     # Touched by the worker at start and after every iteration, for the compose
     # healthcheck (see app.worker.heartbeat); None writes no file.
     worker_heartbeat_file: Path | None = None
+
+    # A quarantined recommendation can be confirmed at most this long after it was
+    # calculated (by the database clock); see app.db.confirm.
+    quarantine_confirm_max_age_minutes: int = Field(default=60, gt=0)
+
+    @field_validator("html_catalog_proxy", "json_api_proxy", mode="before")
+    @classmethod
+    def _empty_proxy_is_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     def retry_policy(self) -> RetryPolicy:
         return RetryPolicy(
