@@ -503,3 +503,92 @@ Codex `gpt-6-astra`, тред `thr_yr3gyz2s53`, 3 раунда, итог — «�
 
 - `npm audit`: moderate в `minimatch` через ESLint 10 / typescript-eslint (только dev-зависимости, в сборку не попадает); исправление — понижение ESLint до 9, не делалось.
 - У воркера нет healthcheck (с шага 6): `docker compose up --wait` считает его готовым по состоянию running.
+
+## Шаг 9. Приёмка: чистое окружение и скрипт сценария показа
+
+### Что сделано
+
+- `scripts/demo_scenario.py` — скрипт приёмки: все 7 шагов «Сценария показа — 5 минут» через API, только через nginx (`--base-url`, по умолчанию `http://127.0.0.1:8080`), БД не трогает. Запуск из корня: `uv run --directory backend python ../scripts/demo_scenario.py`. Зависимостей сверх backend нет (httpx). По каждому шагу печатает «ШАГ N … OK» с ключевыми числами; при первом расхождении — «FAIL» с ожидаемым и фактическим, код 1, демо остаётся как есть.
+  1. `/health` ok; `POST /api/demo/reset` (при 409 ждёт завершения активного прогона и повторяет); 25 товаров, оба режима normal, прогонов нет.
+  2. Прогон → succeeded; A опубликована 1240.00; `/api/calculations/{id}`: учтено 1250.00, отброшены ровно «другой бренд» и «подозрительно низкая цена», в формуле 1 240,00.
+  3. HTML markup_changed → partial; HTML failed/structure «изменилась структура», JSON ok; A 1240.00 «без изменений», расчёт этого прогона по частичным данным; S 1990.00.
+  4. HTML blocked → partial; HTML failed/blocked «заблокирован»; A и S не изменились; печатает путь к runbook `docs/runbook.md` (появится на шаге 10, наличие не проверяется).
+  5. HTML normal, JSON price_spike → S в карантине в этом прогоне, рекомендация 1490.00, изменение −25,1, опубликована 1990.00.
+  6. `/api/published-prices`: S 1990.00, цены 1490.00 у S нет, id расчёта S не равен расчёту из карантина; A 1240.00.
+  7. Подпроцессом `python -m pytest tests/unit/pricing/test_control_cases.py` (интерпретатор окружения backend) — разбирает строку `control cases: N matched, M mismatched`; OK при M = 0, N > 0 и коде pytest 0.
+  В конце — сброс демо (БД как после seed, оба источника normal).
+- Healthcheck воркера (долг шагов 6 и 8): `app/worker/heartbeat.py`. Воркер удаляет старый файл `WORKER_HEARTBEAT_FILE` при старте (после `docker compose restart` `/tmp` контейнера сохраняется, и старый файл дал бы healthy до завершения восстановления), создаёт его после восстановления прогонов и обновляет после каждой итерации цикла, в том числе упавшей. Ошибка записи файла логируется и цикл не останавливает. Healthcheck в compose — `python -m app.worker.heartbeat /tmp/worker-heartbeat --max-age 120` (модуль ничего не импортирует из приложения). 120 с больше самого длинного прогона: во время прогона цикл не итерирует, а сбор источника ограничен бюджетом 30 с. Настройка `worker_heartbeat_file` (по умолчанию нет — файл не пишется; в compose `/tmp/worker-heartbeat`).
+- Тесты (unit, `tests/unit/worker/test_heartbeat.py`, 6): создание и обновление файла, граница `max_age`, удаление, коды выхода healthcheck (нет файла, свежий, старый); `run_worker` с подменёнными `recover` и `worker_iteration`: старый файл удалён до восстановления, файл обновлён после восстановления и после каждой итерации, включая итерацию с исключением; без настройки файл не пишется.
+- `scripts/` проверяются ruff и mypy по конфигурации backend: `scripts/ruff.toml` расширяет `backend/pyproject.toml`, в `[tool.mypy] files` добавлен `../scripts`; команды ruff в «Командах проверки» — `ruff check . ../scripts` и `ruff format --check . ../scripts`.
+- `AGENTS.md`: раздел «Приёмка» (запуск скрипта), healthcheck воркера, обновлённые команды ruff.
+
+### Проверка на чистом окружении
+
+1. В рабочем checkout: `docker compose down -v` — контейнеры и том `procenka_postgres-data` удалены (`docker volume ls` без томов procenka).
+2. `git add -A`, `git clone . .temp/clean`, затем `git diff --cached --binary | git -C .temp/clean apply --index` — в клоне HEAD шага 8 плюс изменения шага 9, ничего больше. В клоне: `git status --short --ignored` не показывает ни неотслеживаемых, ни игнорируемых файлов; нет `.env`, `node_modules`, `.venv`, `dist`; в оболочке нет переменных `POSTGRES_*`, `*_HOST_PORT`, `SCHEDULE_*`, `DATABASE_URL`, `WORKER_*`; `core.autocrlf=false`, `api-entrypoint.sh` с LF.
+3. В клоне: `docker compose build --no-cache`, затем `docker compose up --build -d --wait` (28 с) — все сервисы healthy: postgres, fake-sites, api, worker, nginx. Том создан заново (`CreatedAt` — время запуска); в логах api: `Running upgrade -> 0001` и `seed: 25 products and 24 published prices inserted`.
+4. В клоне дважды подряд `uv run --directory backend python ../scripts/demo_scenario.py` — оба прогона: 7 из 7 OK, код 0 (backend/.venv клона создан uv уже после подъёма стека).
+5. В контейнере воркера: `python -m app.worker.heartbeat /tmp/worker-heartbeat --max-age 120` → 0, `--max-age 0` → 1; `docker inspect` — `healthy`.
+
+### Расписание и восстановление (показываются отдельно; шаг 10 перенесёт в README)
+
+```sh
+# Расписание: воркер пересоздаётся с интервалом 60 с; прогон ставится, если нет активного
+# и последний прогон создан не позже 60 с назад (на пустой таблице прогонов — сразу).
+SCHEDULE_INTERVAL_SECONDS=60 docker compose up -d worker
+curl http://127.0.0.1:8080/api/status               # latest_run.trigger = "schedule"
+docker compose up -d worker                          # вернуть расписание в выключенное состояние
+
+# Восстановление: прогон надолго остаётся running (429 с Retry-After 10 с в пределах бюджета),
+# воркер перезапускается посреди прогона, при старте прогон становится failed/interrupted.
+curl -X PUT http://127.0.0.1:8080/api/demo/modes/json_api -H 'content-type: application/json' -d '{"mode":"blocked","retry_after":10}'
+curl -X POST http://127.0.0.1:8080/api/runs
+curl http://127.0.0.1:8080/api/status               # active_run.status = "running"
+docker compose restart worker
+curl http://127.0.0.1:8080/api/status               # latest_run: failed, finish_reason "interrupted"
+docker compose logs worker | grep interrupted
+curl -X POST http://127.0.0.1:8080/api/demo/reset   # демо и режимы — в исходное состояние
+```
+
+Восстановление проверено вручную на стеке шага 9: прогон 1 running → после `docker compose restart worker` failed/interrupted «прерван: воркер остановился во время прогона», строка лога `run was left running by a stopped worker: failed as interrupted` с `run_id`.
+
+### Покрытие раздела «Тесты» plan.md
+
+| Пункт plan.md | Тесты |
+|---|---|
+| Контрольные примеры из `control_cases.csv`, наценка и округление у границ | `unit/pricing/test_control_cases.py::test_control_case` (25 строк), `test_control_cases_file_is_substantial`; `unit/pricing/test_calculate.py`: `test_control_example_1250_gives_1240_with_full_explanation`, `test_control_example_1100_is_limited_by_lower_bound`, `test_lower_bound_is_rounded_up_to_kopeck`, `test_lower_bound_exact_value_is_not_raised`, `test_target_price_is_rounded_half_up`, `test_ceiling_is_rounded_down_to_kopeck`; `unit/pricing/test_money.py::test_rounding_to_kopecks` |
+| price_spike на контрольном товаре проходит весь путь от источника до карантина | `integration/test_failure_modes.py`: `test_price_spike_on_json_puts_s_into_quarantine`, `test_scenario_modes_in_sequence`; `integration/test_screen_api.py::test_calculation_of_s_in_price_spike_is_quarantined`; `unit/parsers/test_fake_sites_modes.py::test_price_spike_changes_only_the_control_product` |
+| Retry-After больше бюджета сразу даёт ошибку блокировки, без ожидания | `unit/parsers/test_retries.py`: `test_429_with_retry_after_beyond_the_budget_is_blocked_without_waiting`, `test_429_with_retry_after_beyond_what_is_left_of_the_budget_is_blocked`; `unit/parsers/test_json_api.py::test_api_429_beyond_the_budget_is_blocked_without_waiting`; `unit/parsers/test_fake_sites_modes.py::test_json_blocked_with_default_retry_after_is_blocked_without_waiting`; `integration/test_failure_modes.py::test_json_blocked_beyond_budget_gives_partial_without_waiting` |
+| Потолок ниже нижней границы; нулевая и некорректная закупка | `unit/pricing/test_calculate.py`: `test_ceiling_below_lower_bound_is_rules_conflict`, `test_conflict_is_checked_after_rounding`, `test_non_positive_purchase_keeps_previous_price`, `test_invalid_purchase_wins_over_conflict_and_missing_offers`; `unit/pricing/test_explain.py`: `test_rules_conflict`, `test_invalid_purchase` |
+| Пустой список предложений, другой бренд, подозрительно низкая цена | `unit/pricing/test_calculate.py`: `test_empty_offer_list_keeps_previous_price`, `test_other_brand_is_rejected`, `test_only_other_brand_keeps_previous_price`, `test_price_below_factor_is_suspiciously_low`, `test_price_exactly_at_factor_is_not_rejected`; `integration/test_screen_api.py::test_calculation_of_a_explains_the_published_price`; `integration/test_publication.py::test_no_eligible_offers_differs_from_a_technical_failure` |
+| Нормализация артикулов и синонимы брендов | `unit/pricing/test_normalize.py` (4 теста); `unit/pricing/test_calculate.py::test_brand_synonyms_and_article_separators_match`; `unit/db/test_seed_data.py::test_dirty_spellings_from_the_plan_are_present` |
+| Скачок цены и отсутствие предыдущей цены дают карантин | `unit/pricing/test_calculate.py`: `test_price_spike_control_product_goes_to_quarantine`, `test_first_recommendation_without_published_price_goes_to_quarantine`, `test_change_just_above_threshold_goes_to_quarantine`, `test_change_exactly_at_threshold_is_published`; `integration/test_publication.py::test_price_spike_and_missing_previous_price_are_quarantined_not_published` |
+| Сломанная разметка даёт ошибку структуры, а не цену 0 | `unit/parsers/test_html_catalog.py::test_broken_page_is_a_structure_error`; `unit/parsers/test_fields.py::test_unparsable_price_is_a_structure_error_never_zero`; `unit/parsers/test_json_api.py`: `test_bad_price_is_a_structure_error_not_zero`, `test_changed_schema_is_a_structure_error`; `unit/parsers/test_fake_sites_modes.py::test_markup_changed_is_a_structure_error_without_retries`; `integration/test_run_end_to_end.py::test_structure_error_never_becomes_a_price` |
+| 403 и 429 — блокировка, 503 — сеть; повторы только там, где заданы | `unit/parsers/test_retries.py`: `test_403_is_blocked_after_exactly_one_request`, `test_503_is_a_network_error_after_all_attempts_with_pauses`, `test_429_within_budget_is_retried_after_retry_after`, `test_repeated_429_is_blocked_after_the_allowed_retries`, `test_changed_markup_is_a_structure_error_after_exactly_one_request`, `test_other_statuses_are_structure_errors_without_retries` и др.; `unit/parsers/test_html_catalog.py::test_http_status_maps_to_error_kind`; `unit/parsers/test_json_api.py`: `test_api_503_is_network_after_retries`, `test_storefront_403_is_blocked`; `unit/parsers/test_fake_sites_modes.py`: `test_unavailable_is_a_network_error_after_retries`, `test_html_blocked_is_403_blocked_without_retries` |
+| Один источник упал — второй обработан, прогон partial | `integration/test_run_end_to_end.py::test_one_source_failed_gives_partial_run`; `integration/test_failure_modes.py`: `test_markup_changed_on_html_gives_partial_with_structure_error`, `test_blocked_on_html_gives_partial_with_blocked_error`; `integration/test_screen_api.py::test_partial_calculation_is_marked` |
+| Оба источника упали — опубликованные цены не изменились | `integration/test_run_end_to_end.py::test_all_sources_failed_changes_no_published_price`; `integration/test_failure_modes.py::test_unavailable_on_both_fails_the_run_and_changes_no_price` |
+| Второй запрос запуска возвращает тот же прогон | `integration/test_runs_api.py`: `test_repeated_start_returns_the_same_run`, `test_concurrent_starts_create_one_run`; `integration/test_schema_constraints.py::test_only_one_queued_or_running_run`; `integration/test_worker.py::test_schedule_and_manual_start_together_create_one_run` |
+| Перезапуск воркера не оставляет прогон в running | `integration/test_worker.py`: `test_worker_start_fails_a_run_left_running_and_then_runs_normally`, `test_run_cancelled_during_collection_is_recovered_as_interrupted`, `test_worker_survives_an_error_and_leaves_no_run_running`, `test_crash_whose_failure_could_not_be_written_is_recorded_later` |
+| JSON API не выдаёт рекомендации из карантина | `integration/test_publication.py::test_price_spike_and_missing_previous_price_are_quarantined_not_published` (через `GET /api/published-prices`); `integration/test_failure_modes.py::test_price_spike_on_json_puts_s_into_quarantine` |
+
+Непокрытых пунктов нет, новых тестов для таблицы не понадобилось. Сценарий показа целиком дополнительно проверяют `scripts/demo_scenario.py` (на поднятом стеке) и `integration/test_failure_modes.py::test_scenario_modes_in_sequence` (без контейнеров).
+
+### Решения
+
+- Шаг 7 скрипта запускает pytest интерпретатором окружения backend (`sys.executable -m pytest`, рабочая директория `backend/`), а не вложенным `uv run`: окружение то же.
+- При FAIL скрипт не сбрасывает демо, чтобы состояние можно было посмотреть на экране; следующий запуск всё равно начинается со сброса.
+- Heartbeat-файл, а не HTTP-endpoint: у воркера нет HTTP-сервера, а файл проверяет именно то, что цикл жив.
+
+### Ревью
+
+Codex `gpt-6-astra`, тред `thr_h8sdsin6j7`, 1 раунд, итог — «принять». Ревьюер сам прогнал backend-тесты, ruff, mypy, `docker compose up --build -d --wait` (5 сервисов healthy) и скрипт дважды (7/7 OK). Единственное замечание (мелкое): в `AGENTS.md` было написано «6 сервисов» — исправлено на 5.
+
+### Отступления от plan.md
+
+- Нет.
+
+### Долги
+
+- В задании шага — «6 сервисов healthy»; в compose их 5 (postgres, fake-sites, api, worker, nginx — как в `plan.md`, «Стек»), все 5 healthy.
+- Heartbeat не отличает «цикл жив, но БД недоступна» (итерация падает и всё равно обновляет файл): о БД говорит healthcheck api (`/health` → 503).
+- `npm audit` (moderate, dev-зависимости ESLint) — без изменений с шага 8.

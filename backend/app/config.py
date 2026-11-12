@@ -6,6 +6,7 @@ the same for every product and change only with a redeploy.
 
 from decimal import Decimal
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -58,6 +59,9 @@ class Settings(BaseSettings):
     # A scheduled run is queued when no run is active and the latest run is at
     # least this old (decided from the database); 0 turns the schedule off.
     schedule_interval_seconds: float = Field(default=600.0, ge=0)
+    # Touched by the worker at start and after every iteration, for the compose
+    # healthcheck (see app.worker.heartbeat); None writes no file.
+    worker_heartbeat_file: Path | None = None
 
     def retry_policy(self) -> RetryPolicy:
         return RetryPolicy(

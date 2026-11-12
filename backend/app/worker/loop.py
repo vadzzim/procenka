@@ -6,7 +6,8 @@
    with ``finish_reason = interrupted``;
 2. every iteration: queue a scheduled run if it is due (decided from the
    database), claim the oldest queued run with ``FOR UPDATE SKIP LOCKED`` and
-   execute it, then pause ``WORKER_POLL_SECONDS``.
+   execute it, touch the heartbeat file (``WORKER_HEARTBEAT_FILE``, for the
+   compose healthcheck), then pause ``WORKER_POLL_SECONDS``.
 
 An exception in one iteration is logged and the loop goes on; a run whose
 execution raised is failed with ``internal_error`` (retried in the next
@@ -18,6 +19,7 @@ import asyncio
 import contextlib
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -27,6 +29,7 @@ from app.db.runs import claim_next_run, enqueue_scheduled_run, recover_interrupt
 from app.logs import bind_run_id, get_logger
 from app.parsers.base import OfferSource
 from app.worker.execute import RunOutcome, execute_run, fail_run
+from app.worker.heartbeat import beat, clear
 
 logger = get_logger("app.worker")
 
@@ -127,6 +130,19 @@ async def recover(session_factory: async_sessionmaker[AsyncSession]) -> list[int
     return run_ids
 
 
+def heartbeat(path: Path | None, *, stale: bool = False) -> None:
+    """Touch the heartbeat file (``stale``: remove it); an OS error is logged, the loop goes on."""
+    if path is None:
+        return
+    try:
+        if stale:
+            clear(path)
+        else:
+            beat(path)
+    except OSError:
+        logger.exception("could not update the heartbeat file", path=str(path))
+
+
 async def run_worker(
     session_factory: async_sessionmaker[AsyncSession],
     sources: list[OfferSource],
@@ -135,7 +151,10 @@ async def run_worker(
     stop: asyncio.Event,
     now: Now = None,
 ) -> None:
+    # Not healthy until the recovery is done: a file left by the previous process goes first.
+    heartbeat(settings.worker_heartbeat_file, stale=True)
     await recover(session_factory)
+    heartbeat(settings.worker_heartbeat_file)
     logger.info(
         "worker started",
         schedule_interval_seconds=settings.schedule_interval_seconds,
@@ -157,6 +176,7 @@ async def run_worker(
         except Exception:
             # E.g. the database is unreachable; the next iteration tries again.
             logger.exception("worker iteration failed")
+        heartbeat(settings.worker_heartbeat_file)
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(stop.wait(), timeout=settings.worker_poll_seconds)
     logger.info("worker stopped")

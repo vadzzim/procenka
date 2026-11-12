@@ -62,6 +62,16 @@ services:
       # scenario. Shown separately: SCHEDULE_INTERVAL_SECONDS=60 docker compose up -d worker
       SCHEDULE_INTERVAL_SECONDS: ${SCHEDULE_INTERVAL_SECONDS:-0}
       WORKER_POLL_SECONDS: ${WORKER_POLL_SECONDS:-2}
+      # Touched at start (after recovery) and after every loop iteration.
+      WORKER_HEARTBEAT_FILE: /tmp/worker-heartbeat
+    healthcheck:
+      # Healthy while the loop iterates: the heartbeat is at most 120 s old
+      # (longer than any run: the per-source time budget is 30 s).
+      test: ["CMD", "python", "-m", "app.worker.heartbeat", "/tmp/worker-heartbeat", "--max-age", "120"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     # A crashed worker comes back; its run left running is recovered as interrupted.
     restart: unless-stopped
     depends_on:

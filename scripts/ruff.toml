@@ -1,0 +1,2 @@
+# Scripts run with the backend environment and follow its lint and format rules.
+extend = "../backend/pyproject.toml"
